@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { supabase } from "./lib/supabase";
@@ -1620,7 +1621,9 @@ function HomeLanding({
             <button type="button" onClick={onOpenProfile} className={`mt-4 text-xs font-semibold ${isDark ? "text-white" : "text-zinc-900"}`}>Аккаунт →</button>
           </div>
           <div><b className="text-xs">Продукт</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><button type="button" onClick={onCreate} className="block hover:text-purple-600">Создать контент</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Мои работы</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Избранное</button></div></div>
-          <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><span className="block">О нас</span><span className="block">Партнёрская программа</span><span className="block">Контакты</span></div></div>
+          <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/about" className="block hover:text-purple-600">
+            О нас
+          </Link><span className="block">Партнёрская программа</span><span className="block">Контакты</span></div></div>
           <div><b className="text-xs">Помощь</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><span className="block">Частые вопросы</span><span className="block">Конфиденциальность</span><span className="block">Условия использования</span></div></div>
         </div>
         <div className={`mt-7 flex flex-col justify-between gap-3 border-t pt-4 text-[10px] sm:flex-row ${isDark ? "border-white/[0.07] text-zinc-500" : "border-black/[0.06] text-zinc-400"}`}>
@@ -1958,8 +1961,8 @@ function CreateWorkspace({
                     type="button"
                     onClick={() => setProTool(value as typeof proTool)}
                     className={`rounded-xl border p-4 text-left transition hover:-translate-y-0.5 ${proTool === value
-                        ? "border-purple-400 bg-purple-500/[0.10] shadow-[0_8px_22px_rgba(139,92,246,.10)]"
-                        : "border-black/[0.06] hover:border-purple-300 dark:border-white/[0.07] dark:hover:border-purple-400/30"
+                      ? "border-purple-400 bg-purple-500/[0.10] shadow-[0_8px_22px_rgba(139,92,246,.10)]"
+                      : "border-black/[0.06] hover:border-purple-300 dark:border-white/[0.07] dark:hover:border-purple-400/30"
                       }`}
                   >
                     <b className="block text-sm font-semibold leading-5">{label}</b>
