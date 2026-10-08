@@ -1623,7 +1623,9 @@ function HomeLanding({
           <div><b className="text-xs">Продукт</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><button type="button" onClick={onCreate} className="block hover:text-purple-600">Создать контент</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Мои работы</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Избранное</button></div></div>
           <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/about" className="block hover:text-purple-600">
             О нас
-          </Link><span className="block">Партнёрская программа</span><span className="block">Контакты</span></div></div>
+          </Link><span className="block">Партнёрская программа</span><Link href="/contact" className="block hover:text-purple-600">
+              Контакты
+            </Link></div></div>
           <div><b className="text-xs">Помощь</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/help" className="block hover:text-purple-600">
             Частые вопросы
           </Link><Link href="/privacy" className="block hover:text-purple-600">
