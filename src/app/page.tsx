@@ -1624,7 +1624,9 @@ function HomeLanding({
           <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/about" className="block hover:text-purple-600">
             О нас
           </Link><span className="block">Партнёрская программа</span><span className="block">Контакты</span></div></div>
-          <div><b className="text-xs">Помощь</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><span className="block">Частые вопросы</span><span className="block">Конфиденциальность</span><span className="block">Условия использования</span></div></div>
+          <div><b className="text-xs">Помощь</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/help" className="block hover:text-purple-600">
+            Частые вопросы
+          </Link><span className="block">Конфиденциальность</span><span className="block">Условия использования</span></div></div>
         </div>
         <div className={`mt-7 flex flex-col justify-between gap-3 border-t pt-4 text-[10px] sm:flex-row ${isDark ? "border-white/[0.07] text-zinc-500" : "border-black/[0.06] text-zinc-400"}`}>
           <span>© 2026 BizAI. Все права защищены.</span><span>Создано с помощью искусственного интеллекта · Сделано с заботой для вашего бизнеса</span>
