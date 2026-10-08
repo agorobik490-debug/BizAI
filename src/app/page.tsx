@@ -1628,7 +1628,9 @@ function HomeLanding({
             Частые вопросы
           </Link><Link href="/privacy" className="block hover:text-purple-600">
               Конфиденциальность
-            </Link><span className="block">Условия использования</span></div></div>
+            </Link><Link href="/terms" className="block hover:text-purple-600">
+              Условия использования
+            </Link></div></div>
         </div>
         <div className={`mt-7 flex flex-col justify-between gap-3 border-t pt-4 text-[10px] sm:flex-row ${isDark ? "border-white/[0.07] text-zinc-500" : "border-black/[0.06] text-zinc-400"}`}>
           <span>© 2026 BizAI. Все права защищены.</span><span>Создано с помощью искусственного интеллекта · Сделано с заботой для вашего бизнеса</span>
