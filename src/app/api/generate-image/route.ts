@@ -5,8 +5,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-
-
 export async function POST(request: Request) {
   try {
     const authorization = request.headers.get("authorization");
@@ -19,6 +17,13 @@ export async function POST(request: Request) {
     }
 
     const accessToken = authorization.slice("Bearer ".length).trim();
+
+    if (!accessToken) {
+      return Response.json(
+        { error: "Недействительный токен авторизации." },
+        { status: 401 }
+      );
+    }
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,13 +41,6 @@ export async function POST(request: Request) {
       }
     );
 
-    if (!accessToken) {
-      return Response.json(
-        { error: "Недействительный токен авторизации." },
-        { status: 401 }
-      );
-    }
-
     const {
       data: { user },
       error: userError,
@@ -55,46 +53,42 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: subscription, error: subscriptionError } =
-      await supabase
-        .from("subscriptions")
-        .select("plan, status, expires_at")
-        .eq("user_id", user.id)
-        .maybeSingle();
+    const { data: subscription, error: subscriptionError } = await supabase
+      .from("subscriptions")
+      .select("plan, status, expires_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
 
     if (subscriptionError) {
       console.error("Ошибка проверки подписки:", subscriptionError);
-
       return Response.json(
         { error: "Не удалось проверить подписку." },
         { status: 500 }
       );
     }
 
-    const isActivePro =
-      subscription?.plan === "pro" &&
+    // Pro и Business имеют доступ к генерации изображений.
+    // expires_at = null означает отсутствие срока окончания.
+    const hasActivePaidPlan =
+      (subscription?.plan === "pro" || subscription?.plan === "business") &&
       subscription?.status === "active" &&
       (
-        !subscription.expires_at ||
+        !subscription?.expires_at ||
         new Date(subscription.expires_at).getTime() > Date.now()
       );
 
-    if (!isActivePro) {
+    if (!hasActivePaidPlan) {
       return Response.json(
         {
           error:
-            "Генерация изображений доступна только в BizAI Pro.",
+            "Генерация изображений доступна только в BizAI Pro и Business.",
         },
         { status: 403 }
       );
     }
 
     const body = await request.json();
-
-    const prompt =
-      typeof body?.prompt === "string"
-        ? body.prompt.trim()
-        : "";
+    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
 
     if (!prompt) {
       return Response.json(
@@ -105,10 +99,7 @@ export async function POST(request: Request) {
 
     if (prompt.length > 4000) {
       return Response.json(
-        {
-          error:
-            "Описание изображения слишком длинное. Максимум — 4000 символов.",
-        },
+        { error: "Описание изображения слишком длинное. Максимум — 4000 символов." },
         { status: 400 }
       );
     }
@@ -132,7 +123,7 @@ export async function POST(request: Request) {
       image: `data:image/png;base64,${imageData}`,
     });
   } catch (error) {
-    console.error("BizAI Pro image generation error:", error);
+    console.error("BizAI image generation error:", error);
 
     return Response.json(
       {
