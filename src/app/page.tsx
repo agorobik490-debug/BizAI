@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { supabase } from "./lib/supabase";
+import SupportChat from "./components/SupportChat";
 
 type MediaType = "image" | "video";
 type MediaQuality = "auto" | "standard" | "high";
@@ -1454,6 +1455,7 @@ export default function Home() {
           background: rgba(124, 58, 237, .22);
         }
       `}</style>
+      <SupportChat theme={theme} subscriptionPlan={subscriptionPlan} />
     </main>
   );
 }
