@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 
 type ChatRole = "user" | "assistant";
 type ChatMessage = { role: ChatRole; content: string };
@@ -19,6 +19,80 @@ const QUICK_QUESTIONS = [
   "Вопрос по тарифу или оплате",
   "Business Workspace и команда",
 ];
+
+const SUPPORT_PATHS = new Set([
+  "/contact",
+  "/help",
+  "/pricing",
+  "/team",
+  "/about",
+  "/terms",
+  "/privacy",
+  "/referrals",
+]);
+
+// Safely render the small subset of Markdown commonly used in support replies.
+// React nodes are used instead of dangerouslySetInnerHTML so reply text stays escaped.
+function renderInlineSupportText(text: string, prefix = "support-text"): ReactNode[] {
+  const tokenPattern = /(\*\*[^*]+\*\*|support\.bizai@gmail\.com|\/(?:contact|help|pricing|team|about|terms|privacy|referrals))/g;
+  const output: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let tokenIndex = 0;
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      output.push(
+        <Fragment key={`${prefix}-text-${tokenIndex++}`}>
+          {text.slice(lastIndex, match.index)}
+        </Fragment>,
+      );
+    }
+
+    const token = match[0];
+    let rendered: ReactNode;
+
+    if (token.startsWith("**") && token.endsWith("**")) {
+      const inner = token.slice(2, -2);
+      let innerContent: ReactNode = inner;
+      if (inner === SUPPORT_EMAIL) {
+        innerContent = (
+          <a href={`mailto:${SUPPORT_EMAIL}`} className="underline decoration-current/50 underline-offset-2 hover:decoration-current">
+            {inner}
+          </a>
+        );
+      } else if (SUPPORT_PATHS.has(inner)) {
+        innerContent = (
+          <Link href={inner} className="underline decoration-current/50 underline-offset-2 hover:decoration-current">
+            {inner}
+          </Link>
+        );
+      }
+      rendered = <strong className="font-semibold">{innerContent}</strong>;
+    } else if (token === SUPPORT_EMAIL) {
+      rendered = (
+        <a href={`mailto:${SUPPORT_EMAIL}`} className="underline decoration-current/50 underline-offset-2 hover:decoration-current">
+          {token}
+        </a>
+      );
+    } else {
+      rendered = (
+        <Link href={token} className="underline decoration-current/50 underline-offset-2 hover:decoration-current">
+          {token}
+        </Link>
+      );
+    }
+
+    output.push(<Fragment key={`${prefix}-token-${tokenIndex++}`}>{rendered}</Fragment>);
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    output.push(<Fragment key={`${prefix}-text-${tokenIndex}`}>{text.slice(lastIndex)}</Fragment>);
+  }
+
+  return output;
+}
 
 export default function SupportChat({
   theme = "dark",
@@ -127,7 +201,9 @@ export default function SupportChat({
             {messages.map((message, index) => (
               <div key={`${index}-${message.role}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-3 text-[13px] leading-5 ${message.role === "user" ? "rounded-br-md bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white" : isDark ? "rounded-bl-md border border-white/[0.07] bg-white/[0.045] text-zinc-100" : "rounded-bl-md border border-black/[0.06] bg-zinc-50 text-zinc-800"}`}>
-                  {message.content}
+                  {message.role === "assistant"
+                    ? renderInlineSupportText(message.content, `message-${index}`)
+                    : message.content}
                 </div>
               </div>
             ))}
