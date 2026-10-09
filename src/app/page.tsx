@@ -131,6 +131,16 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    const referralCode = new URLSearchParams(window.location.search).get("ref");
+
+    if (referralCode) {
+      const normalizedCode = referralCode.trim().toUpperCase();
+
+      if (/^[A-Z0-9]{4,32}$/.test(normalizedCode)) {
+        window.localStorage.setItem("bizai-referral-code", normalizedCode);
+      }
+    }
+
     const savedTheme = window.localStorage.getItem("bizai-theme");
 
     if (savedTheme === "dark" || savedTheme === "light") {
@@ -170,6 +180,29 @@ export default function Home() {
     window.localStorage.setItem("bizai-theme", theme);
   }, [theme, themeLoaded]);
 
+  const claimStoredReferral = async () => {
+    try {
+      const code = window.localStorage.getItem("bizai-referral-code");
+
+      if (!code) return;
+
+      const { data, error } = await supabase.rpc("claim_referral", {
+        p_code: code,
+      });
+
+      if (error) {
+        console.error("Referral claim error:", error);
+        return;
+      }
+
+      if (data === true) {
+        window.localStorage.removeItem("bizai-referral-code");
+      }
+    } catch (error) {
+      console.error("Referral claim failed:", error);
+    }
+  };
+
   const loadAccountData = async () => {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) {
@@ -183,10 +216,26 @@ export default function Home() {
     const user = userData.user;
     setUserEmail(user.email ?? null);
 
-    const { data: subscription } = await supabase.from("subscriptions").select("plan,status").eq("user_id", user.id).maybeSingle();
+    await claimStoredReferral();
+
+    const { data: subscription } = await supabase
+      .from("subscriptions")
+      .select("plan,status,expires_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
     if (subscription) {
-      setSubscriptionPlan(subscription.plan);
-      setSubscriptionStatus(subscription.status);
+      const expiresAt = subscription.expires_at
+        ? new Date(subscription.expires_at).getTime()
+        : null;
+      const isExpired = expiresAt !== null && expiresAt <= Date.now();
+
+      // Treat an expired subscription as non-Pro in the UI without changing DB data.
+      setSubscriptionPlan(isExpired ? "free" : subscription.plan);
+      setSubscriptionStatus(isExpired ? "expired" : subscription.status);
+    } else {
+      setSubscriptionPlan("free");
+      setSubscriptionStatus("active");
     }
 
     let { data: limit } = await supabase.from("user_limits").select("generations_left").eq("user_id", user.id).maybeSingle();
@@ -766,11 +815,37 @@ export default function Home() {
   };
 
   const handleRegister = async () => {
-    if (!authEmail.trim() || !authPassword.trim()) { setAuthMessage("Введите email и пароль"); return; }
-    setAuthLoading(true); setAuthMessage("");
-    const { error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthMessage("Введите email и пароль");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthMessage("");
+
+    const { data, error } = await supabase.auth.signUp({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+
     setAuthLoading(false);
-    setAuthMessage(error ? error.message : "Аккаунт создан. Проверь почту для подтверждения.");
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    if (data.session) {
+      await claimStoredReferral();
+      await loadAccountData();
+      setAuthMode(null);
+      setAuthMessage("");
+      return;
+    }
+
+    setAuthMessage(
+      "Аккаунт создан. Проверь почту для подтверждения. После подтверждения реферальная связь будет сохранена автоматически."
+    );
   };
 
   const handleLogin = async () => {
@@ -1623,7 +1698,12 @@ function HomeLanding({
           <div><b className="text-xs">Продукт</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><button type="button" onClick={onCreate} className="block hover:text-purple-600">Создать контент</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Мои работы</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Избранное</button></div></div>
           <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/about" className="block hover:text-purple-600">
             О нас
-          </Link><span className="block">Партнёрская программа</span><Link href="/contact" className="block hover:text-purple-600">
+          </Link><Link
+            href="/referrals"
+            className="transition hover:text-zinc-900 dark:hover:text-white"
+          >
+              Партнёрская программа
+            </Link><Link href="/contact" className="block hover:text-purple-600">
               Контакты
             </Link></div></div>
           <div><b className="text-xs">Помощь</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/help" className="block hover:text-purple-600">
