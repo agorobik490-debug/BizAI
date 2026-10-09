@@ -126,6 +126,7 @@ export default function Home() {
     website: "",
   });
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [hasBusinessTeam, setHasBusinessTeam] = useState(false);
   const [mediaViewer, setMediaViewer] = useState<{ url: string; type: "image" | "video" } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -203,10 +204,26 @@ export default function Home() {
     }
   };
 
+  const publishBusinessAsset = async (kind: "text" | "image" | "video", title: string, content: string) => {
+    if (!hasBusinessTeam) return;
+    try {
+      const { error } = await supabase.rpc("publish_business_asset", {
+        p_kind: kind,
+        p_title: title,
+        p_content: content,
+      });
+      if (error) console.warn("Business shared-library sync skipped:", error.message);
+    } catch (error) {
+      // Sharing is an optional Business feature and must never break normal generation.
+      console.warn("Business shared-library sync skipped:", error);
+    }
+  };
+
   const loadAccountData = async () => {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) {
       setUserEmail(null);
+      setHasBusinessTeam(false);
       setSubscriptionPlan("free");
       setSubscriptionStatus("active");
       setHistory([]);
@@ -236,6 +253,42 @@ export default function Home() {
     } else {
       setSubscriptionPlan("free");
       setSubscriptionStatus("active");
+    }
+
+    // Business team membership is optional; ordinary accounts continue unchanged.
+    const { data: teamMembership, error: teamMembershipError } = await supabase
+      .from("business_team_members")
+      .select("team_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    setHasBusinessTeam(!teamMembershipError && Boolean(teamMembership?.team_id));
+
+    if (!teamMembershipError && teamMembership?.team_id) {
+      const { data: sharedKit, error: sharedKitError } = await supabase
+        .from("business_team_brand_kit")
+        .select("name,audience,tone,colors,website")
+        .eq("team_id", teamMembership.team_id)
+        .maybeSingle();
+      if (!sharedKitError && sharedKit) {
+        setBrandKit({
+          name: sharedKit.name ?? "",
+          audience: sharedKit.audience ?? "",
+          tone: sharedKit.tone ?? "",
+          colors: sharedKit.colors ?? "",
+          website: sharedKit.website ?? "",
+        });
+        try {
+          window.localStorage.setItem("bizai-brand-kit", JSON.stringify({
+            name: sharedKit.name ?? "",
+            audience: sharedKit.audience ?? "",
+            tone: sharedKit.tone ?? "",
+            colors: sharedKit.colors ?? "",
+            website: sharedKit.website ?? "",
+          }));
+        } catch {
+          // Local cache is optional; the shared kit remains in Supabase.
+        }
+      }
     }
 
     let { data: limit } = await supabase.from("user_limits").select("generations_left").eq("user_id", user.id).maybeSingle();
@@ -398,11 +451,25 @@ export default function Home() {
     return [instructions[proTool] || "", brandContext].filter(Boolean).join("\n\n");
   };
 
-  const saveBrandKit = () => {
+  const saveBrandKit = async () => {
     try {
       window.localStorage.setItem("bizai-brand-kit", JSON.stringify(brandKit));
     } catch {
       // Local storage may be unavailable in restricted browser contexts.
+    }
+
+    if (!hasBusinessTeam) return;
+    try {
+      const { error } = await supabase.rpc("upsert_business_brand_kit", {
+        p_name: brandKit.name,
+        p_audience: brandKit.audience,
+        p_tone: brandKit.tone,
+        p_colors: brandKit.colors,
+        p_website: brandKit.website,
+      });
+      if (error) console.error("Не удалось сохранить общий Brand Kit:", error.message);
+    } catch (error) {
+      console.error("Не удалось сохранить общий Brand Kit:", error);
     }
   };
 
@@ -414,7 +481,7 @@ export default function Home() {
     const user = userData.user;
     if (image && fileType === "video" && image.size > MAX_VIDEO_SIZE) { setResult("Видео больше 50 MB. Генерация не списана, файл не изменён."); return; }
 
-    const isPro = subscriptionPlan === "pro" && subscriptionStatus === "active";
+    const isPro = (subscriptionPlan === "pro" || subscriptionPlan === "business") && subscriptionStatus === "active";
     const { data: limit } = await supabase.from("user_limits").select("generations_left").eq("user_id", user.id).single();
     if (!limit) { setResult("Не удалось проверить лимит генераций."); return; }
 
@@ -493,6 +560,11 @@ export default function Home() {
         mediaUrl = data?.signedUrl ?? null;
       }
       setHistory(prev => [{ id: Number(saved.id), type, tone, language, result: finalResult, favorite: false, mediaPath, mediaType, mediaUrl, quality }, ...prev]);
+      void publishBusinessAsset(
+        image?.type.startsWith("video/") ? "video" : image?.type.startsWith("image/") ? "image" : "text",
+        `${type} · ${tone}`,
+        finalResult,
+      );
       setView("create");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -519,7 +591,7 @@ export default function Home() {
       return;
     }
 
-    if (subscriptionPlan !== "pro" || subscriptionStatus !== "active") {
+    if ((subscriptionPlan !== "pro" && subscriptionPlan !== "business") || subscriptionStatus !== "active") {
       setProOpen(true);
       return;
     }
@@ -622,6 +694,8 @@ export default function Home() {
           await supabase.storage.from("generation-media").remove([mediaPath]);
           throw new Error(`Не удалось сохранить работу: ${saveError?.message || "неизвестная ошибка"}`);
         }
+
+        void publishBusinessAsset("image", "BizAI Pro — изображение", historyResult);
 
         const { data: signedData, error: signedUrlError } = await supabase.storage
           .from("generation-media")
@@ -867,7 +941,7 @@ export default function Home() {
 
   const logout = async () => {
     await supabase.auth.signOut();
-    setUserEmail(null); setSubscriptionPlan("free"); setSubscriptionStatus("active"); setHistory([]); setGenerationsLeft(5); setView("home"); setShowProfileMenu(false);
+    setUserEmail(null); setHasBusinessTeam(false); setSubscriptionPlan("free"); setSubscriptionStatus("active"); setHistory([]); setGenerationsLeft(5); setView("home"); setShowProfileMenu(false);
   };
 
   const filteredHistory = useMemo(() => {
@@ -903,6 +977,8 @@ export default function Home() {
               <TopNavButton active={view === "create"} onClick={() => { setView("create"); setShowProfileMenu(false); }}>Создать</TopNavButton>
               <TopNavButton active={view === "history"} onClick={() => { setView("history"); setShowProfileMenu(false); }}>Мои работы</TopNavButton>
               <TopNavButton active={view === "favorites"} onClick={() => { setView("favorites"); setShowProfileMenu(false); }}>Избранное</TopNavButton>
+              <Link href="/pricing" className="top-nav-button">Тарифы</Link>
+              {(subscriptionPlan === "business" || hasBusinessTeam) && <Link href="/team" className="top-nav-button">Команда</Link>}
             </nav>
 
             <div className="relative flex items-center gap-2">
@@ -937,6 +1013,8 @@ export default function Home() {
             <MobileNavButton active={view === "create"} onClick={() => setView("create")}>Создать</MobileNavButton>
             <MobileNavButton active={view === "history"} onClick={() => setView("history")}>Мои работы</MobileNavButton>
             <MobileNavButton active={view === "favorites"} onClick={() => setView("favorites")}>Избранное</MobileNavButton>
+            <Link href="/pricing" className="mobile-nav-button border border-black/[0.06] dark:border-white/[0.07]">Тарифы</Link>
+            {(subscriptionPlan === "business" || hasBusinessTeam) && <Link href="/team" className="mobile-nav-button border border-black/[0.06] dark:border-white/[0.07]">Команда</Link>}
           </div>
         </header>
 
@@ -1518,9 +1596,11 @@ function ProfileDropdown({
           </p>
           <p className="mt-1 truncate text-[10px] opacity-55">
             {userEmail
-              ? subscriptionPlan === "pro"
-                ? "BizAI Pro"
-                : "Free plan"
+              ? subscriptionPlan === "business"
+                ? "BizAI Business"
+                : subscriptionPlan === "pro"
+                  ? "BizAI Pro"
+                  : "Free plan"
               : "Войти в аккаунт"}
           </p>
         </div>
@@ -1695,7 +1775,7 @@ function HomeLanding({
             <p className={`mt-3 max-w-sm text-xs leading-5 ${muted}`}>Ваш AI-партнёр для создания контента для бизнеса. Экономьте время и развивайте свой бренд с помощью искусственного интеллекта.</p>
             <button type="button" onClick={onOpenProfile} className={`mt-4 text-xs font-semibold ${isDark ? "text-white" : "text-zinc-900"}`}>Аккаунт →</button>
           </div>
-          <div><b className="text-xs">Продукт</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><button type="button" onClick={onCreate} className="block hover:text-purple-600">Создать контент</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Мои работы</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Избранное</button></div></div>
+          <div><b className="text-xs">Продукт</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><button type="button" onClick={onCreate} className="block hover:text-purple-600">Создать контент</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Мои работы</button><button type="button" onClick={onExamples} className="block hover:text-purple-600">Избранное</button><Link href="/pricing" className="block hover:text-purple-600">Тарифы</Link></div></div>
           <div><b className="text-xs">Компания</b><div className={`mt-3 space-y-2 text-[11px] ${muted}`}><Link href="/about" className="block hover:text-purple-600">
             О нас
           </Link><Link
@@ -1809,7 +1889,7 @@ function CreateWorkspace({
   setIsEditing,
   setResult,
 }: any) {
-  const isPro = subscriptionPlan === "pro" && subscriptionStatus === "active";
+  const isPro = (subscriptionPlan === "pro" || subscriptionPlan === "business") && subscriptionStatus === "active";
 
   return (
     <div className="mx-auto max-w-[1180px]">
@@ -1826,7 +1906,7 @@ function CreateWorkspace({
         <div className={`rounded-2xl border px-4 py-3 ${panel}`}>
           <p className={`text-[10px] ${muted}`}>{isPro ? "Тариф" : "Осталось генераций"}</p>
           <p className="mt-1 text-right text-sm font-bold">
-            {isPro ? "BizAI Pro" : `${generationsLeft}/5`}
+            {isPro ? (subscriptionPlan === "business" ? "BizAI Business" : "BizAI Pro") : `${generationsLeft}/5`}
           </p>
         </div>
       </div>
@@ -2664,7 +2744,7 @@ function ProfilePage({ userEmail, subscriptionPlan, subscriptionStatus, generati
   const card = isDark ? "border-white/[.08] bg-[#111116]" : "border-[#e6e4ec] bg-white";
   const sub = isDark ? "bg-white/[.045] text-zinc-200" : "bg-[#f6f5f8] text-zinc-800";
   const muted = isDark ? "text-zinc-400" : "text-zinc-500";
-  const isPro = subscriptionPlan === "pro";
+  const isPro = subscriptionPlan === "pro" || subscriptionPlan === "business";
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -2688,7 +2768,7 @@ function ProfilePage({ userEmail, subscriptionPlan, subscriptionStatus, generati
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             <div className={`rounded-2xl p-4 ${sub}`}>
               <p className={`text-[10px] uppercase tracking-wider ${muted}`}>Тариф</p>
-              <p className="mt-2 text-sm font-semibold">{isPro ? "BizAI Pro" : "Free"}</p>
+              <p className="mt-2 text-sm font-semibold">{subscriptionPlan === "business" ? "BizAI Business" : isPro ? "BizAI Pro" : "Free"}</p>
             </div>
             <div className={`rounded-2xl p-4 ${sub}`}>
               <p className={`text-[10px] uppercase tracking-wider ${muted}`}>Статус</p>
