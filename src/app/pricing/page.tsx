@@ -53,6 +53,7 @@ export default function PricingPage() {
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
   const [loadingAccount, setLoadingAccount] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
   const selectedPeriod = periods.find((item) => item.months === selectedMonths) ?? periods[0];
 
   const proTotal = useMemo(() => totalPrice(PRO_MONTHLY, selectedPeriod), [selectedPeriod]);
@@ -130,11 +131,80 @@ export default function PricingPage() {
     setNoticeError(isError);
   };
 
+  const startProCheckout = async () => {
+    if (checkoutLoading) return;
+
+    if (!userEmail) {
+      showNotice("Сначала войди в аккаунт BizAI, чтобы начать оплату.", true);
+      return;
+    }
+
+    // На сервере сейчас настроен тестовый платёж
+    // только на 3.99 MDL за один месяц.
+    if (selectedMonths !== 1) {
+      showNotice(
+        "Для тестирования MAIB выбери срок 1 месяц. Сейчас доступен только тестовый платёж 3.99 MDL.",
+        true
+      );
+      return;
+    }
+
+    setCheckoutLoading(true);
+    showNotice("Создаём тестовый платёж MAIB…");
+
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          plan: "pro",
+          months: 1,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error || data?.message || `Ошибка сервера: ${response.status}`
+        );
+      }
+
+      const checkoutUrl = data?.checkoutUrl;
+
+      if (
+        typeof checkoutUrl !== "string" ||
+        !checkoutUrl.startsWith("https://")
+      ) {
+        throw new Error(
+          "Сервер не вернул корректную ссылку на оплату MAIB."
+        );
+      }
+
+      window.location.assign(checkoutUrl);
+    } catch (error) {
+      console.error("MAIB checkout error:", error);
+
+      showNotice(
+        error instanceof Error
+          ? error.message
+          : "Не удалось создать платёж. Попробуй ещё раз.",
+        true
+      );
+
+      setCheckoutLoading(false);
+    }
+  };
+
   const savePlanChoice = async (plan: Exclude<PlanKey, "free">) => {
     if (currentPlan === plan && currentPlanStatus === "active") {
       showNotice(`У тебя уже выбран активный тариф ${planTitle(plan)}. Новая подписка не создавалась.`);
       return;
     }
+
+
     const monthly = plan === "pro" ? PRO_MONTHLY : BUSINESS_MONTHLY;
     const choice: SavedChoice = {
       plan,
@@ -213,7 +283,7 @@ export default function PricingPage() {
               return <button key={period.months} type="button" onClick={() => { setSelectedMonths(period.months); setNotice(""); }} aria-pressed={active} className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${active ? "border-purple-500 bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_8px_24px_rgba(124,58,237,.22)]" : "border-black/[0.07] bg-zinc-50 text-zinc-600 hover:border-purple-300 dark:border-white/[0.08] dark:bg-white/[0.025] dark:text-zinc-300"}`}><span className="block">{period.label}</span>{period.badge ? <span className={`mt-1 block text-[10px] ${active ? "text-white/80" : "text-emerald-600 dark:text-emerald-400"}`}>{period.badge}</span> : <span className={`mt-1 block text-[10px] ${active ? "text-white/75" : "text-zinc-400"}`}>Стандартная цена</span>}</button>;
             })}
           </div>
-          <p className="mt-3 text-center text-[11px] leading-5 text-zinc-400">Автопродление не включено. Сроки и скидки показаны как тарифная модель; оплата и автоматическая активация пока не подключены.</p>
+          <p className="mt-3 text-center text-[11px] leading-5 text-zinc-400">Автопродление не включено. Сейчас проверяется только тестовая оплата MAIB; цены и скидки на странице не определяют сумму тестового платежа.</p>
         </div>
 
         <div className="mx-auto mt-5 max-w-4xl rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-sm dark:border-white/[0.07] dark:bg-[#101014]">
@@ -244,9 +314,9 @@ export default function PricingPage() {
             <div className="absolute right-5 top-5 rounded-full bg-purple-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">Популярный</div>
             <div className="flex items-start justify-between gap-3 pr-24"><div><p className="text-sm font-semibold text-purple-600 dark:text-purple-300">Для активной работы</p><h2 className="mt-1 text-2xl font-bold">Pro</h2></div><span className="grid h-11 w-11 place-items-center rounded-2xl bg-purple-600/10 text-xl">♛</span></div>
             <div className="mt-5"><p className="text-4xl font-black">{formatUSD(proTotal)}</p><p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">за {selectedPeriod.label.toLowerCase()}</p>{selectedPeriod.discount > 0 && <p className="mt-2 text-xs text-zinc-400"><span className="line-through">{formatUSD(proRegularTotal)}</span><span className="ml-2 font-semibold text-emerald-600 dark:text-emerald-400">Экономия {formatUSD(proRegularTotal - proTotal)} ({selectedPeriod.discount}%)</span></p>}<p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{formatUSD(proTotal / selectedMonths)} в месяц</p></div>
-            <button type="button" onClick={() => savePlanChoice("pro")} disabled={currentPlan === "pro" && currentPlanStatus === "active"} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-sm font-bold text-white shadow-[0_8px_22px_rgba(124,58,237,.18)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{currentPlan === "pro" && currentPlanStatus === "active" ? "Текущий тариф" : "Выбрать Pro"}</button>
+            <button type="button" onClick={startProCheckout} disabled={checkoutLoading || (currentPlan === "pro" && currentPlanStatus === "active")} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-sm font-bold text-white shadow-[0_8px_22px_rgba(124,58,237,.18)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{currentPlan === "pro" && currentPlanStatus === "active" ? "Текущий тариф" : checkoutLoading ? "Создаём платёж..." : "Выбрать Pro"}</button>
             <ul className="mt-6 space-y-3 text-sm text-zinc-700 dark:text-zinc-200"><Feature>Текстовые генерации без списания бесплатного лимита</Feature><Feature>Генерация рекламных изображений</Feature><Feature>Контент-пакеты, соцсети и контент-планы</Feature><Feature>Рекламные кампании и Brand Kit</Feature><Feature>История текстов и медиа</Feature></ul>
-            <p className="mt-auto pt-6 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">Выбор срока уже работает. Для реальной покупки нужно подключить платёжного провайдера.</p>
+            <p className="mt-auto pt-6 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">Оплата Pro подключена только для тестирования MAIB: сейчас создаётся тестовый платёж 3.99 MDL за 1 месяц. Автоматическая активация после оплаты ещё не подключена.</p>
           </article>
 
           <article className="flex flex-col rounded-[26px] border border-black/[0.07] bg-white p-6 shadow-sm dark:border-white/[0.08] dark:bg-[#101014] sm:p-7">
@@ -260,7 +330,7 @@ export default function PricingPage() {
 
         <section className="mt-10 rounded-[26px] border border-black/[0.06] bg-white p-6 dark:border-white/[0.07] dark:bg-[#101014] sm:p-8"><div className="text-center"><p className="text-xs font-bold uppercase tracking-[0.18em] text-purple-600">Сравнение</p><h2 className="mt-2 text-2xl font-bold sm:text-3xl">Что входит в тарифы</h2></div><div className="mt-6 overflow-x-auto"><table className="w-full min-w-[650px] border-collapse text-left text-sm"><thead><tr className="border-b border-black/[0.07] dark:border-white/[0.08]"><th className="px-3 py-3 font-semibold text-zinc-500">Возможность</th><th className="px-3 py-3 font-semibold">Free</th><th className="px-3 py-3 font-semibold text-purple-600">Pro</th><th className="px-3 py-3 font-semibold text-fuchsia-600">Business</th></tr></thead><tbody><CompareRow label="Текстовая генерация" free="5 стартовых генераций" pro="Без списания лимита" business="Без списания лимита" /><CompareRow label="AI-изображения" free="—" pro="✓" business="✓" /><CompareRow label="Контент-пакеты и Brand Kit" free="—" pro="✓" business="✓" /><CompareRow label="Личная история работ" free="✓" pro="✓" business="✓" /><CompareRow label="Участники команды" free="—" pro="—" business="До 5" /><CompareRow label="Общий Brand Kit" free="—" pro="—" business="✓" /><CompareRow label="Общая библиотека текстовых результатов" free="—" pro="—" business="✓" /><CompareRow label="Управление приглашениями" free="—" pro="—" business="Владелец команды" /></tbody></table></div></section>
 
-        <section className="mt-8 grid gap-4 md:grid-cols-2"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 dark:border-white/[0.07] dark:bg-[#101014]"><h3 className="font-bold">Можно ли оплатить сейчас?</h3><p className="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Нет. Страница считает цену и сохраняет выбранный вариант, но платёжный провайдер ещё не подключён. Деньги не списываются, тариф автоматически не активируется.</p></div><div className="rounded-2xl border border-black/[0.06] bg-white p-5 dark:border-white/[0.07] dark:bg-[#101014]"><h3 className="font-bold">Как работает срок?</h3><p className="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Выбери 1, 3, 6 или 12 месяцев. Сумма и экономия пересчитываются сразу. Скидки и Business-цена — предлагаемые параметры; их нужно окончательно утвердить перед подключением оплаты.</p></div></section>
+        <section className="mt-8 grid gap-4 md:grid-cols-2"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 dark:border-white/[0.07] dark:bg-[#101014]"><h3 className="font-bold">Можно ли оплатить сейчас?</h3><p className="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Доступен только тестовый платёж MAIB на 3.99 MDL за 1 месяц. Это тестовая среда; автоматическая активация тарифа после подтверждения оплаты ещё не подключена.</p></div><div className="rounded-2xl border border-black/[0.06] bg-white p-5 dark:border-white/[0.07] dark:bg-[#101014]"><h3 className="font-bold">Как работает срок?</h3><p className="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Выбери 1, 3, 6 или 12 месяцев. Сумма и экономия пересчитываются сразу. Скидки и Business-цена — предлагаемые параметры; их нужно окончательно утвердить перед подключением оплаты.</p></div></section>
 
         {hasBusinessTeam && <div className="mt-8 text-center"><Link href="/team" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-purple-500/30 px-5 py-3 text-sm font-semibold text-purple-700 dark:text-purple-200">Перейти в рабочее пространство команды →</Link></div>}
         <div className="mt-10 text-center"><Link href="/" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">Вернуться в BizAI</Link></div>
