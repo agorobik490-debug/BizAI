@@ -7,10 +7,9 @@ const MAIB_BASE_URL = "https://sandbox.maibmerchants.md";
 
 type JsonObject = Record<string, unknown>;
 
-async function readResponse(response: Response): Promise<{
-    data: JsonObject | null;
-    raw: string;
-}> {
+async function readResponse(
+    response: Response
+): Promise<{ data: JsonObject | null; raw: string }> {
     const raw = await response.text();
 
     try {
@@ -49,6 +48,8 @@ export async function POST() {
         const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
 
         if (!clientId || !clientSecret) {
+            console.error("MAIB credentials are not configured.");
+
             return NextResponse.json(
                 { error: "MAIB credentials are not configured." },
                 { status: 500 }
@@ -56,17 +57,41 @@ export async function POST() {
         }
 
         if (!siteUrl) {
+            console.error("NEXT_PUBLIC_SITE_URL is not configured.");
+
             return NextResponse.json(
                 { error: "NEXT_PUBLIC_SITE_URL is not configured." },
                 { status: 500 }
             );
         }
 
-        // Цена задаётся на сервере, а не принимается от браузера.
+        // Проверяем адрес сайта, чтобы сформировать корректные redirect URL.
+        let parsedSiteUrl: URL;
+
+        try {
+            parsedSiteUrl = new URL(siteUrl);
+        } catch {
+            return NextResponse.json(
+                { error: "NEXT_PUBLIC_SITE_URL is not a valid URL." },
+                { status: 500 }
+            );
+        }
+
+        if (
+            parsedSiteUrl.protocol !== "https:" &&
+            parsedSiteUrl.hostname !== "localhost"
+        ) {
+            return NextResponse.json(
+                { error: "The site URL must use HTTPS." },
+                { status: 500 }
+            );
+        }
+
+        // Тестовая цена задаётся только на сервере.
         const amount = 3.99;
         const currency = "MDL";
 
-        // 1. Авторизация в MAIB.
+        // 1. Получаем токен MAIB.
         const tokenResponse = await fetch(
             `${MAIB_BASE_URL}/v2/auth/token`,
             {
@@ -91,9 +116,10 @@ export async function POST() {
         if (
             !tokenResponse.ok ||
             typeof accessToken !== "string" ||
-            typeof tokenType !== "string"
+            !accessToken ||
+            typeof tokenType !== "string" ||
+            !tokenType
         ) {
-            // Не записываем токен, ClientSecret или полный ответ в лог.
             console.error("MAIB authentication failed:", {
                 httpStatus: tokenResponse.status,
                 responseKeys: tokenData ? Object.keys(tokenData) : [],
@@ -113,7 +139,7 @@ export async function POST() {
             );
         }
 
-        // 2. Создание платёжной сессии.
+        // 2. Создаём платёжную сессию.
         const checkoutResponse = await fetch(
             `${MAIB_BASE_URL}/v2/checkouts`,
             {
@@ -142,21 +168,30 @@ export async function POST() {
         const checkoutResult = getObject(checkoutData?.result);
         const checkoutUrl = checkoutResult?.checkoutUrl;
 
+        const apiErrors = checkoutData?.errors;
+        const hasApiErrors =
+            Array.isArray(apiErrors) && apiErrors.length > 0;
+
+        const validCheckoutUrl =
+            typeof checkoutUrl === "string" &&
+            checkoutUrl.length > 0 &&
+            /^https:\/\//i.test(checkoutUrl);
+
         if (
             !checkoutResponse.ok ||
-            checkoutData?.ok === false ||
-            typeof checkoutUrl !== "string" ||
-            !/^https:\/\//i.test(checkoutUrl)
+            checkoutData === null ||
+            checkoutData.ok === false ||
+            hasApiErrors ||
+            !validCheckoutUrl
         ) {
-            // Логируем только структуру ответа и безопасные поля.
-            // Полный ответ может содержать чувствительные данные.
+            // Не выводим токены, секреты или полный ответ в логи.
             console.error("MAIB checkout creation failed:", {
                 httpStatus: checkoutResponse.status,
                 responseIsJson: checkoutData !== null,
                 responseKeys: checkoutData
                     ? Object.keys(checkoutData)
                     : [],
-                errors: checkoutData?.errors,
+                errors: hasApiErrors ? apiErrors : undefined,
                 resultKeys: checkoutResult
                     ? Object.keys(checkoutResult)
                     : [],
@@ -173,19 +208,25 @@ export async function POST() {
             });
 
             return NextResponse.json(
-                { error: "Could not create MAIB checkout. Check server logs." },
+                {
+                    error:
+                        "Could not create MAIB checkout. Check server logs.",
+                },
                 { status: 502 }
             );
         }
 
+        // Возвращаем клиенту только URL платёжной страницы.
         return NextResponse.json({
             checkoutUrl,
         });
     } catch (error) {
-        console.error(
-            "Checkout route error:",
-            error instanceof Error ? error.message : "Unknown error"
-        );
+        console.error("Checkout route error:", {
+            message:
+                error instanceof Error
+                    ? error.message
+                    : "Unknown error",
+        });
 
         return NextResponse.json(
             { error: "An unexpected payment error occurred." },
