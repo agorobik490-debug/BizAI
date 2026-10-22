@@ -320,6 +320,25 @@ export default function Home() {
     setHistory(items);
   };
 
+  // Keep the UI in sync when Supabase restores or changes the session,
+  // including after returning from Google OAuth.
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        // Defer Supabase queries until after the auth callback finishes.
+        window.setTimeout(() => {
+          void loadAccountData();
+          setAuthMode(null);
+          setAuthMessage("");
+        }, 0);
+      } else if (event === "SIGNED_OUT") {
+        window.setTimeout(() => void loadAccountData(), 0);
+      }
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, []);
+
   const setUploadedFile = (file: File | undefined) => {
     if (!file) return;
     if (fileType === "video" && file.size > MAX_VIDEO_SIZE) {
@@ -932,6 +951,24 @@ export default function Home() {
     await loadAccountData(); setAuthMode(null); setAuthMessage("");
   };
 
+  const handleGoogleLogin = async () => {
+    setAuthLoading(true);
+    setAuthMessage("");
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+      },
+    });
+
+    if (error) {
+      setAuthLoading(false);
+      setAuthMessage(error.message);
+    }
+  };
+
+
   const handleReset = async () => {
     if (!authEmail.trim()) { setAuthMessage("Введите email"); return; }
     setAuthLoading(true); setAuthMessage("");
@@ -1182,6 +1219,7 @@ export default function Home() {
             setAuthEmail={setAuthEmail}
             setAuthPassword={setAuthPassword}
             handleLogin={handleLogin}
+            handleGoogleLogin={handleGoogleLogin}
             handleRegister={handleRegister}
             handleReset={handleReset}
             setAuthMessage={setAuthMessage}
@@ -2550,6 +2588,7 @@ function AuthModal({
   setAuthEmail,
   setAuthPassword,
   handleLogin,
+  handleGoogleLogin,
   handleRegister,
   handleReset,
   setAuthMessage,
@@ -2626,6 +2665,30 @@ function AuthModal({
                 ? "Создать аккаунт"
                 : "Отправить ссылку"}
         </button>
+
+        {authMode !== "reset" && (
+          <>
+            <div className={`my-5 flex items-center gap-3 text-xs ${muted}`}>
+              <span className="h-px flex-1 bg-current opacity-20" />
+              <span>или</span>
+              <span className="h-px flex-1 bg-current opacity-20" />
+            </div>
+            <button
+              type="button"
+              disabled={authLoading}
+              onClick={handleGoogleLogin}
+              className={`flex w-full items-center justify-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.06] ${isDark ? "border-white/10" : "border-black/10"}`}
+            >
+              <svg aria-hidden="true" viewBox="0 0 48 48" className="h-5 w-5">
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" />
+                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.76 7.18l7.73 6C44.42 37.9 46.98 31.8 46.98 24.55Z" />
+                <path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.87.93 7.52 2.56 10.78l7.97-6.19Z" />
+                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.8l-7.73-6c-2.15 1.45-4.9 2.3-8.17 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" />
+              </svg>
+              Продолжить с Google
+            </button>
+          </>
+        )}
 
         {authMessage && (
           <p className={`mt-4 rounded-2xl bg-purple-500/10 p-3 text-center text-xs ${muted}`}>
