@@ -153,16 +153,28 @@ export default function PricingPage() {
     showNotice("Создаём тестовый платёж MAIB…");
 
     try {
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.access_token) {
+        throw new Error("Войди в аккаунт BizAI заново перед оплатой.");
+      }
+
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           plan: "pro",
           months: 1,
         }),
       });
+
 
       const data = await response.json();
 

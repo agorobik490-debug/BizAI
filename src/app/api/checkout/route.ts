@@ -1,32 +1,15 @@
-import { NextResponse } from "next/server";
+
+import { createClient } from "@supabase/supabase-js";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const MAIB_BASE_URL = "https://sandbox.maibmerchants.md";
+const AMOUNT = 3.99;
+const CURRENCY = "MDL";
 
 type JsonObject = Record<string, unknown>;
-
-async function readResponse(
-  response: Response
-): Promise<{ data: JsonObject | null; raw: string }> {
-  const raw = await response.text();
-
-  try {
-    const parsed: unknown = JSON.parse(raw);
-
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
-    ) {
-      return { data: parsed as JsonObject, raw };
-    }
-
-    return { data: null, raw };
-  } catch {
-    return { data: null, raw };
-  }
-}
 
 function getObject(value: unknown): JsonObject | null {
   if (
@@ -36,65 +19,47 @@ function getObject(value: unknown): JsonObject | null {
   ) {
     return value as JsonObject;
   }
-
   return null;
 }
 
-/**
- * Logs only a short, bounded view of the provider's error objects.
- * Never log client credentials or access tokens.
- */
-function safeApiErrors(value: unknown): unknown {
-  if (!Array.isArray(value)) return undefined;
-
-  return value.slice(0, 5).map((item) => {
-    if (typeof item === "string") return item.slice(0, 300);
-
-    const obj = getObject(item);
-    if (!obj) return "Unrecognized MAIB error";
-
-    const safe: Record<string, unknown> = {};
-
-    for (const key of ["code", "errorCode", "message", "errorMessage", "field"]) {
-      const field = obj[key];
-      if (typeof field === "string") safe[key] = field.slice(0, 300);
-    }
-
-    return Object.keys(safe).length > 0 ? safe : "MAIB returned an error object";
-  });
+async function readJson(response: Response): Promise<JsonObject | null> {
+  try {
+    return getObject(await response.json());
+  } catch {
+    return null;
+  }
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const clientId = process.env.MAIB_CLIENT_ID;
     const clientSecret = process.env.MAIB_CLIENT_SECRET;
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
 
-    if (!clientId || !clientSecret) {
-      console.error("MAIB credentials are not configured.");
-
+    if (
+      !supabaseUrl ||
+      !supabaseKey ||
+      !serviceRoleKey ||
+      !clientId ||
+      !clientSecret ||
+      !siteUrl
+    ) {
+      console.error("Checkout configuration is incomplete.");
       return NextResponse.json(
-        { error: "MAIB credentials are not configured." },
-        { status: 500 }
-      );
-    }
-
-    if (!siteUrl) {
-      console.error("NEXT_PUBLIC_SITE_URL is not configured.");
-
-      return NextResponse.json(
-        { error: "NEXT_PUBLIC_SITE_URL is not configured." },
+        { error: "Сервер оплаты не настроен полностью." },
         { status: 500 }
       );
     }
 
     let parsedSiteUrl: URL;
-
     try {
       parsedSiteUrl = new URL(siteUrl);
     } catch {
       return NextResponse.json(
-        { error: "NEXT_PUBLIC_SITE_URL is not a valid URL." },
+        { error: "Некорректный адрес сайта." },
         { status: 500 }
       );
     }
@@ -104,135 +69,164 @@ export async function POST() {
       parsedSiteUrl.hostname !== "localhost"
     ) {
       return NextResponse.json(
-        { error: "The site URL must use HTTPS." },
+        { error: "Адрес сайта должен использовать HTTPS." },
         { status: 500 }
       );
     }
 
-    // Temporary sandbox amount; this is controlled server-side.
-    const amount = 3.99;
-    const currency = "MDL";
+    // Получаем токен авторизованного пользователя из заголовка.
+    const authorization = request.headers.get("authorization");
+    const accessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
 
-    // 1. Request a MAIB access token.
-    const tokenResponse = await fetch(`${MAIB_BASE_URL}/v2/auth/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: "Войди в аккаунт BizAI перед оплатой." },
+        { status: 401 }
+      );
+    }
+
+    const authClient = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
       },
-      body: JSON.stringify({
-        clientId,
-        clientSecret,
-      }),
-      cache: "no-store",
     });
 
-    const { data: tokenData } = await readResponse(tokenResponse);
-    const tokenResult = getObject(tokenData?.result);
+    const { data: authData, error: authError } =
+      await authClient.auth.getUser(accessToken);
 
-    const accessToken = tokenResult?.accessToken;
-    const tokenType = tokenResult?.tokenType;
+    if (authError || !authData.user) {
+      return NextResponse.json(
+        { error: "Сессия недействительна. Войди в аккаунт заново." },
+        { status: 401 }
+      );
+    }
+
+    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+
+    // Сумма задаётся только сервером, не браузером.
+    const tokenResponse = await fetch(
+      `${MAIB_BASE_URL}/v2/auth/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+
+    const tokenData = await readJson(tokenResponse);
+    const tokenResult = getObject(tokenData?.result);
+    const maibToken = tokenResult?.accessToken;
+    const tokenType = tokenResult?.tokenType ?? "Bearer";
 
     if (
       !tokenResponse.ok ||
-      typeof accessToken !== "string" ||
-      !accessToken ||
-      typeof tokenType !== "string" ||
-      !tokenType
+      tokenData?.ok === false ||
+      typeof maibToken !== "string" ||
+      !maibToken ||
+      typeof tokenType !== "string"
     ) {
-      console.error("MAIB authentication failed:", {
+      console.error("MAIB authentication failed.", {
         httpStatus: tokenResponse.status,
-        responseKeys: tokenData ? Object.keys(tokenData) : [],
-        resultKeys: tokenResult ? Object.keys(tokenResult) : [],
-        apiOk: tokenData?.ok,
-        apiError:
-          typeof tokenData?.message === "string"
-            ? tokenData.message.slice(0, 300)
-            : typeof tokenData?.error === "string"
-              ? tokenData.error.slice(0, 300)
-              : undefined,
-        apiErrors: safeApiErrors(tokenData?.errors),
       });
-
       return NextResponse.json(
-        { error: "Could not authenticate with MAIB." },
+        { error: "Не удалось авторизоваться в MAIB." },
         { status: 502 }
       );
     }
 
-    // 2. Create a hosted checkout session.
-    const checkoutResponse = await fetch(`${MAIB_BASE_URL}/v2/checkouts`, {
-      method: "POST",
-      headers: {
-        Authorization: `${tokenType} ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        amount,
-        currency,
-        language: "en",
-        orderInfo: {
-          description: "BizAI Pro - first month",
+    const checkoutResponse = await fetch(
+      `${MAIB_BASE_URL}/v2/checkouts`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `${tokenType} ${maibToken}`,
+          "Content-Type": "application/json",
         },
-        successUrl: `${siteUrl}/payment/success`,
-        failUrl: `${siteUrl}/payment/fail`,
-      }),
-      cache: "no-store",
-    });
+        body: JSON.stringify({
+          amount: AMOUNT,
+          currency: CURRENCY,
+          language: "ru",
+          orderInfo: {
+            description: "BizAI Pro - 1 month",
+          },
+          successUrl: `${siteUrl}/payment/success`,
+          failUrl: `${siteUrl}/payment/fail`,
+        }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      }
+    );
 
-    const { data: checkoutData, raw } = await readResponse(checkoutResponse);
-
+    const checkoutData = await readJson(checkoutResponse);
     const checkoutResult = getObject(checkoutData?.result);
+    const checkoutId = checkoutResult?.checkoutId;
     const checkoutUrl = checkoutResult?.checkoutUrl;
-
-    const checkoutErrors = checkoutData?.errors;
-    const hasApiErrors =
-      Array.isArray(checkoutErrors) && checkoutErrors.length > 0;
-
-    const validCheckoutUrl =
-      typeof checkoutUrl === "string" &&
-      checkoutUrl.length > 0 &&
-      /^https:\/\//i.test(checkoutUrl);
+    const errors = checkoutData?.errors;
 
     if (
       !checkoutResponse.ok ||
-      checkoutData === null ||
-      checkoutData.ok === false ||
-      hasApiErrors ||
-      !validCheckoutUrl
+      checkoutData?.ok === false ||
+      (Array.isArray(errors) && errors.length > 0) ||
+      typeof checkoutId !== "string" ||
+      typeof checkoutUrl !== "string" ||
+      !/^https:\/\//i.test(checkoutUrl)
     ) {
-      console.error("MAIB checkout creation failed:", {
+      console.error("MAIB checkout creation failed.", {
         httpStatus: checkoutResponse.status,
-        responseIsJson: checkoutData !== null,
-        responseKeys: checkoutData ? Object.keys(checkoutData) : [],
-        errors: safeApiErrors(checkoutErrors),
-        resultKeys: checkoutResult ? Object.keys(checkoutResult) : [],
         apiOk: checkoutData?.ok,
-        apiError:
-          typeof checkoutData?.message === "string"
-            ? checkoutData.message.slice(0, 300)
-            : typeof checkoutData?.error === "string"
-              ? checkoutData.error.slice(0, 300)
-              : undefined,
-        responsePreview: checkoutData ? undefined : raw.slice(0, 300),
       });
-
       return NextResponse.json(
-        { error: "Could not create MAIB checkout. Check server logs." },
+        { error: "Не удалось создать платёж MAIB." },
         { status: 502 }
       );
     }
 
-    // Return only the hosted payment URL to the browser.
-    return NextResponse.json({ checkoutUrl });
+    // Привязываем Checkout к подтверждённому аккаунту.
+    const { error: insertError } = await adminClient
+      .from("payment_orders")
+      .insert({
+        checkout_id: checkoutId,
+        user_id: authData.user.id,
+        plan: "pro",
+        months: 1,
+        amount: AMOUNT,
+        currency: CURRENCY,
+        status: "pending",
+      });
+
+    if (insertError) {
+      console.error("Could not save payment order.", {
+        code: insertError.code,
+      });
+      return NextResponse.json(
+        { error: "Платёж создан, но не удалось сохранить заказ. Обратись в поддержку." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(
+      { checkoutUrl },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (error) {
-    console.error("Checkout route error:", {
-      message:
-        error instanceof Error ? error.message : "Unknown error",
+    console.error("Checkout route error.", {
+      reason:
+        error instanceof Error && error.name === "TimeoutError"
+          ? "timeout"
+          : "request_error",
     });
 
     return NextResponse.json(
-      { error: "An unexpected payment error occurred." },
-      { status: 500 }
+      { error: "Не удалось создать платёж. Попробуй позже." },
+      { status: 502 }
     );
   }
 }

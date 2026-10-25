@@ -1,214 +1,246 @@
 
+import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAIB_BASE_URL = "https://sandbox.maibmerchants.md";
-
-const EXPECTED_AMOUNT_CENTS = 399;
+const EXPECTED_AMOUNT = 3.99;
 const EXPECTED_CURRENCY = "MDL";
-
-type JsonObject = Record<string, unknown>;
-
-type ParsedResponse = {
-  data: JsonObject | null;
-};
-
-function getObject(value: unknown): JsonObject | null {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value)
-  ) {
-    return value as JsonObject;
-  }
-
-  return null;
-}
-
-async function readJson(
-  response: Response
-): Promise<ParsedResponse> {
-  try {
-    const parsed: unknown = await response.json();
-    return { data: getObject(parsed) };
-  } catch {
-    return { data: null };
-  }
-}
-
-function isValidUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
-  );
-}
 
 export async function GET(request: NextRequest) {
   try {
-    // 1. Проверяем ID Checkout.
-    const checkoutId =
-      request.nextUrl.searchParams.get("checkoutId");
+    const checkoutId = request.nextUrl.searchParams.get("checkoutId");
+    const authorization = request.headers.get("authorization");
+    const accessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
 
-    if (!checkoutId || !isValidUuid(checkoutId)) {
+    if (
+      !checkoutId ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkoutId)
+    ) {
       return NextResponse.json(
         { error: "Invalid checkoutId." },
         { status: 400 }
       );
     }
 
-    // 2. Получаем серверные учётные данные.
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: "Authentication required." },
+        { status: 401 }
+      );
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const clientId = process.env.MAIB_CLIENT_ID;
     const clientSecret = process.env.MAIB_CLIENT_SECRET;
 
-    if (!clientId || !clientSecret) {
-      console.error(
-        "MAIB status check: credentials are not configured."
-      );
-
+    if (
+      !supabaseUrl ||
+      !supabaseKey ||
+      !serviceRoleKey ||
+      !clientId ||
+      !clientSecret
+    ) {
+      console.error("Payment status environment configuration is incomplete.");
       return NextResponse.json(
-        { error: "Payment configuration is incomplete." },
+        { error: "Payment verification is not configured." },
         { status: 500 }
       );
     }
 
-    // 3. Авторизуемся в MAIB.
-    const authResponse = await fetch(
+    // Verify the signed-in user.
+    const authClient = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+
+    const { data: userData, error: userError } =
+      await authClient.auth.getUser(accessToken);
+
+    if (userError || !userData.user) {
+      return NextResponse.json(
+        { error: "Please sign in again." },
+        { status: 401 }
+      );
+    }
+
+    // Use the service role only on the server.
+    const admin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+
+    // Ensure this checkout belongs to the signed-in user.
+    const { data: order, error: orderError } = await admin
+      .from("payment_orders")
+      .select("checkout_id, user_id, amount, currency, status")
+      .eq("checkout_id", checkoutId)
+      .maybeSingle();
+
+    if (orderError) {
+      console.error("Could not load payment order:", orderError.message);
+      return NextResponse.json(
+        { error: "Could not load payment order." },
+        { status: 500 }
+      );
+    }
+
+    if (!order || order.user_id !== userData.user.id) {
+      return NextResponse.json(
+        { error: "Payment order not found." },
+        { status: 404 }
+      );
+    }
+
+    // A previously activated order must not be applied again.
+    if (order.status === "paid") {
+      return NextResponse.json({
+        status: "Completed",
+        amount: Number(order.amount),
+        currency: order.currency,
+        verified: true,
+        activated: true,
+      });
+    }
+
+    if (order.status !== "pending") {
+      return NextResponse.json({
+        status: order.status,
+        verified: false,
+        activated: false,
+      });
+    }
+
+    // Authenticate with MAIB.
+    const tokenResponse = await fetch(
       `${MAIB_BASE_URL}/v2/auth/token`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          clientId,
-          clientSecret,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret }),
         cache: "no-store",
-        signal: AbortSignal.timeout(15000),
       }
     );
 
-    const { data: authData } = await readJson(authResponse);
-    const authResult = getObject(authData?.result);
-
-    const accessToken = authResult?.accessToken;
-    const tokenType = authResult?.tokenType ?? "Bearer";
+    const tokenData = await tokenResponse.json();
+    const token = tokenData?.result?.accessToken;
+    const tokenType = tokenData?.result?.tokenType;
 
     if (
-      !authResponse.ok ||
-      authData?.ok === false ||
-      !authResult ||
-      typeof accessToken !== "string" ||
-      !accessToken ||
+      !tokenResponse.ok ||
+      typeof token !== "string" ||
       typeof tokenType !== "string" ||
-      !tokenType
+      tokenData?.errors
     ) {
-      console.error("MAIB status check: authentication failed.", {
-        httpStatus: authResponse.status,
+      console.error("MAIB authentication failed:", {
+        httpStatus: tokenResponse.status,
       });
-
       return NextResponse.json(
-        { error: "Could not authenticate with MAIB." },
+        { error: "MAIB authentication failed." },
         { status: 502 }
       );
     }
 
-    // 4. Запрашиваем актуальный статус Checkout у MAIB.
+    // Ask MAIB for the real checkout status.
     const statusResponse = await fetch(
       `${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}`,
       {
         method: "GET",
         headers: {
-          Authorization: `${tokenType} ${accessToken}`,
-          Accept: "application/json",
+          Authorization: `${tokenType} ${token}`,
+          "Content-Type": "application/json",
         },
         cache: "no-store",
-        signal: AbortSignal.timeout(15000),
       }
     );
 
-    const { data: statusData } = await readJson(statusResponse);
-    const result = getObject(statusData?.result);
+    const data = await statusResponse.json();
 
     if (
       !statusResponse.ok ||
-      statusData === null ||
-      statusData.ok === false ||
-      !result ||
-      (Array.isArray(statusData.errors) &&
-        statusData.errors.length > 0)
+      !data?.result ||
+      data?.ok === false ||
+      data?.errors
     ) {
-      console.error("MAIB status check failed.", {
+      console.error("MAIB checkout status request failed:", {
         httpStatus: statusResponse.status,
-        supportID: statusData?.supportID,
       });
-
       return NextResponse.json(
-        { error: "Could not verify payment status with MAIB." },
+        { error: "MAIB could not verify this checkout." },
         { status: 502 }
       );
     }
 
-    // 5. Проверяем поля ответа.
-    const status = result.status;
-    const rawAmount = result.amount;
-    const currency = result.currency;
+    const checkout = data.result;
+    const status =
+      typeof checkout.status === "string"
+        ? checkout.status
+        : "Unknown";
 
-    const amount =
-      typeof rawAmount === "number" ||
-        (typeof rawAmount === "string" &&
-          rawAmount.trim() !== "")
-        ? Number(rawAmount)
-        : NaN;
+    const amount = Number(checkout.amount);
+    const currency = checkout.currency;
 
-    const validAmount =
-      Number.isFinite(amount) &&
-      amount >= 0 &&
-      Math.round(amount * 100) === EXPECTED_AMOUNT_CENTS;
-
-    const validCurrency = currency === EXPECTED_CURRENCY;
-    const completed = status === "Completed";
-
-    // verified означает, что проверенные поля совпали.
-    // Это ещё не подтверждает принадлежность заказа пользователю.
     const verified =
-      completed && validAmount && validCurrency;
+      status === "Completed" &&
+      Number.isFinite(amount) &&
+      Math.round(amount * 100) === Math.round(EXPECTED_AMOUNT * 100) &&
+      Math.round(Number(order.amount) * 100) ===
+        Math.round(EXPECTED_AMOUNT * 100) &&
+      currency === EXPECTED_CURRENCY &&
+      order.currency === EXPECTED_CURRENCY;
 
-    // 6. Возвращаем результат без токенов и секретных данных.
-    return NextResponse.json(
-      {
-        checkoutId,
-        status:
-          typeof status === "string" ? status : "Unknown",
+    if (!verified) {
+      return NextResponse.json({
+        status,
         amount: Number.isFinite(amount) ? amount : null,
-        currency:
-          typeof currency === "string" ? currency : null,
-        verified,
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store, max-age=0",
-        },
-      }
-    );
-  } catch (error) {
-    const isTimeout =
-      error instanceof Error &&
-      error.name === "TimeoutError";
+        currency: typeof currency === "string" ? currency : null,
+        verified: false,
+        activated: false,
+      });
+    }
 
-    console.error("MAIB status check request failed.", {
-      reason: isTimeout ? "timeout" : "request_error",
+    // Activate only after MAIB and the saved order both match.
+    const { data: activation, error: activationError } =
+      await admin.rpc("activate_bizai_pro", {
+        p_checkout_id: checkoutId,
+      });
+
+    if (activationError || activation?.ok !== true) {
+      console.error("Pro activation failed:", {
+        message: activationError?.message,
+        activationError: activation?.error,
+      });
+      return NextResponse.json(
+        { error: "Payment verified, but Pro activation failed." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      status,
+      amount,
+      currency,
+      verified: true,
+      activated: true,
+      alreadyActivated: activation.already_activated === true,
     });
+  } catch (error) {
+    console.error(
+      "Checkout status route error:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
 
     return NextResponse.json(
-      {
-        error: isTimeout
-          ? "MAIB request timed out."
-          : "Internal payment verification error.",
-      },
-      { status: 502 }
+      { error: "Unexpected payment verification error." },
+      { status: 500 }
     );
   }
 }

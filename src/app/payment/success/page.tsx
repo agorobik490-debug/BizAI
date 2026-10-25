@@ -2,10 +2,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabase";
 
 type PaymentResult = {
     status?: string;
     verified?: boolean;
+    activated?: boolean;
+    alreadyActivated?: boolean;
     amount?: number | null;
     currency?: string | null;
     error?: string;
@@ -31,9 +34,30 @@ export default function PaymentSuccessPage() {
             }
 
             try {
+                // Получаем сессию пользователя BizAI.
+                const {
+                    data: { session },
+                    error: sessionError,
+                } = await supabase.auth.getSession();
+
+                if (sessionError || !session?.access_token) {
+                    throw new Error(
+                        "Войди в аккаунт BizAI заново, чтобы проверить оплату."
+                    );
+                }
+
+                // Проверяем платёж и активируем Pro на сервере.
                 const response = await fetch(
-                    `/api/checkout/status?checkoutId=${encodeURIComponent(checkoutId)}`,
-                    { cache: "no-store" }
+                    `/api/checkout/status?checkoutId=${encodeURIComponent(
+                        checkoutId
+                    )}`,
+                    {
+                        method: "GET",
+                        headers: {
+                            Authorization: `Bearer ${session.access_token}`,
+                        },
+                        cache: "no-store",
+                    }
                 );
 
                 const data: PaymentResult = await response.json();
@@ -43,19 +67,23 @@ export default function PaymentSuccessPage() {
                 if (!response.ok) {
                     setMessage(
                         data.error ||
-                            "Не удалось проверить оплату. Попробуйте обновить страницу позже."
+                            "Не удалось проверить оплату. Попробуйте позже."
                     );
                 } else {
                     setPayment(data);
                 }
-            } catch {
+            } catch (error) {
                 if (!cancelled) {
                     setMessage(
-                        "Не удалось связаться с сервером для проверки оплаты."
+                        error instanceof Error
+                            ? error.message
+                            : "Не удалось проверить оплату."
                     );
                 }
             } finally {
-                if (!cancelled) setLoading(false);
+                if (!cancelled) {
+                    setLoading(false);
+                }
             }
         }
 
@@ -75,22 +103,31 @@ export default function PaymentSuccessPage() {
 
                 {loading ? (
                     <p className="mt-5 text-zinc-300">
-                        Проверяем платёж через MAIB...
+                        Проверяем платёж и активацию Pro...
                     </p>
                 ) : message ? (
                     <p className="mt-5 text-amber-300">{message}</p>
-                ) : payment?.verified ? (
+                ) : payment?.verified && payment.activated ? (
                     <>
                         <p className="mt-5 text-xl font-semibold text-green-400">
-                            Оплата подтверждена
+                            BizAI Pro активирован!
                         </p>
                         <p className="mt-3 text-zinc-300">
-                            MAIB подтвердил платёж:{" "}
+                            Оплата подтверждена:{" "}
                             {payment.amount?.toFixed(2)} {payment.currency}.
                         </p>
                         <p className="mt-3 text-sm text-zinc-400">
-                            Проверка оплаты завершена. Автоматическое
-                            подключение Pro ещё не настроено.
+                            Твой тариф Pro активен. Можешь возвращаться к работе.
+                        </p>
+                    </>
+                ) : payment?.verified ? (
+                    <>
+                        <p className="mt-5 text-lg font-semibold text-amber-300">
+                            Оплата подтверждена
+                        </p>
+                        <p className="mt-3 text-zinc-300">
+                            Платёж принят, но активация Pro пока не подтверждена.
+                            Обнови страницу немного позже.
                         </p>
                     </>
                 ) : (
@@ -100,8 +137,8 @@ export default function PaymentSuccessPage() {
                         </p>
                         <p className="mt-3 text-zinc-300">
                             Статус MAIB: {payment?.status || "неизвестен"}.
-                            Если вы только что оплатили, подождите немного
-                            и обновите страницу.
+                            Если ты только что оплатил, подожди немного
+                            и обнови страницу.
                         </p>
                         {payment?.amount != null && payment.currency && (
                             <p className="mt-2 text-sm text-zinc-400">
