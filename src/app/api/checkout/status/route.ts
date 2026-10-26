@@ -164,6 +164,7 @@ export async function GET(request: NextRequest) {
 
     const data = await statusResponse.json();
 
+
     if (
       !statusResponse.ok ||
       !data?.result ||
@@ -172,12 +173,15 @@ export async function GET(request: NextRequest) {
     ) {
       console.error("MAIB checkout status request failed:", {
         httpStatus: statusResponse.status,
+        responseBody: JSON.stringify(data ?? null).slice(0, 2000),
       });
+
       return NextResponse.json(
         { error: "MAIB could not verify this checkout." },
         { status: 502 }
       );
     }
+
 
     const checkout = data.result;
     const status =
@@ -193,7 +197,7 @@ export async function GET(request: NextRequest) {
       Number.isFinite(amount) &&
       Math.round(amount * 100) === Math.round(EXPECTED_AMOUNT * 100) &&
       Math.round(Number(order.amount) * 100) ===
-        Math.round(EXPECTED_AMOUNT * 100) &&
+      Math.round(EXPECTED_AMOUNT * 100) &&
       currency === EXPECTED_CURRENCY &&
       order.currency === EXPECTED_CURRENCY;
 
