@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+﻿import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -37,19 +37,19 @@ export async function POST(request: NextRequest) {
   try {
     const accessToken = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!accessToken) {
-      return NextResponse.json({ error: "Войди в аккаунт BizAI." }, { status: 401 });
+      return NextResponse.json({ error: "Đ’ĐľĐąĐ´Đ¸ Đ˛ Đ°ĐşĐşĐ°ŃĐ˝Ń‚ BizAI." }, { status: 401 });
     }
 
     let body: JsonObject | null;
     try {
       body = getObject(await request.json());
     } catch {
-      return NextResponse.json({ error: "Некорректный JSON-запрос." }, { status: 400 });
+      return NextResponse.json({ error: "ĐťĐµĐşĐľŃ€Ń€ĐµĐşŃ‚Đ˝Ń‹Đą JSON-Đ·Đ°ĐżŃ€ĐľŃ." }, { status: 400 });
     }
 
     const checkoutId = body?.checkoutId;
     if (!validUuid(checkoutId)) {
-      return NextResponse.json({ error: "Некорректный checkoutId." }, { status: 400 });
+      return NextResponse.json({ error: "ĐťĐµĐşĐľŃ€Ń€ĐµĐşŃ‚Đ˝Ń‹Đą checkoutId." }, { status: 400 });
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const clientId = process.env.MAIB_CLIENT_ID;
     const clientSecret = process.env.MAIB_CLIENT_SECRET;
     if (!supabaseUrl || !supabaseKey || !serviceRoleKey || !clientId || !clientSecret) {
-      return NextResponse.json({ error: "Сервер проверки возврата не настроен." }, { status: 500 });
+      return NextResponse.json({ error: "ĐˇĐµŃ€Đ˛ĐµŃ€ ĐżŃ€ĐľĐ˛ĐµŃ€ĐşĐ¸ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚Đ° Đ˝Đµ Đ˝Đ°ŃŃ‚Ń€ĐľĐµĐ˝." }, { status: 500 });
     }
 
     const authClient = createClient(supabaseUrl, supabaseKey, {
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     });
     const { data: userData, error: userError } = await authClient.auth.getUser(accessToken);
     if (userError || !userData.user) {
-      return NextResponse.json({ error: "Сессия недействительна. Войди заново." }, { status: 401 });
+      return NextResponse.json({ error: "ĐˇĐµŃŃĐ¸ŃŹ Đ˝ĐµĐ´ĐµĐąŃŃ‚Đ˛Đ¸Ń‚ĐµĐ»ŃŚĐ˝Đ°. Đ’ĐľĐąĐ´Đ¸ Đ·Đ°Đ˝ĐľĐ˛Đľ." }, { status: 401 });
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey, {
@@ -80,10 +80,10 @@ export async function POST(request: NextRequest) {
 
     if (orderError) {
       console.error("Refund status: order lookup failed.", orderError.code);
-      return NextResponse.json({ error: "Не удалось проверить заказ." }, { status: 500 });
+      return NextResponse.json({ error: "ĐťĐµ ŃĐ´Đ°Đ»ĐľŃŃŚ ĐżŃ€ĐľĐ˛ĐµŃ€Đ¸Ń‚ŃŚ Đ·Đ°ĐşĐ°Đ·." }, { status: 500 });
     }
     if (!order || order.user_id !== userData.user.id) {
-      return NextResponse.json({ error: "Заказ не найден." }, { status: 404 });
+      return NextResponse.json({ error: "Đ—Đ°ĐşĐ°Đ· Đ˝Đµ Đ˝Đ°ĐąĐ´ĐµĐ˝." }, { status: 404 });
     }
     if (
       !["refund_pending", "refunded"].includes(order.status) ||
@@ -91,10 +91,10 @@ export async function POST(request: NextRequest) {
       !sameAmount(order.amount, EXPECTED_AMOUNT) ||
       order.currency !== EXPECTED_CURRENCY
     ) {
-      return NextResponse.json({ error: "У заказа нет сохранённого возврата для проверки." }, { status: 409 });
+      return NextResponse.json({ error: "ĐŁ Đ·Đ°ĐşĐ°Đ·Đ° Đ˝ĐµŃ‚ ŃĐľŃ…Ń€Đ°Đ˝Ń‘Đ˝Đ˝ĐľĐłĐľ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚Đ° Đ´Đ»ŃŹ ĐżŃ€ĐľĐ˛ĐµŃ€ĐşĐ¸." }, { status: 409 });
     }
 
-    const tokenResponse = await fetch(${MAIB_BASE_URL}/v2/auth/token, {
+    const tokenResponse = await fetch(`${MAIB_BASE_URL}/v2/auth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId, clientSecret }),
@@ -107,12 +107,12 @@ export async function POST(request: NextRequest) {
     const tokenType = tokenResult?.tokenType ?? "Bearer";
     if (!tokenResponse.ok || tokenData?.ok === false || (Array.isArray(tokenData?.errors) && tokenData.errors.length > 0) || typeof token !== "string" || !token || typeof tokenType !== "string") {
       console.error("Refund status: MAIB authentication failed.", { httpStatus: tokenResponse.status });
-      return NextResponse.json({ error: "Не удалось авторизоваться в MAIB." }, { status: 502 });
+      return NextResponse.json({ error: "ĐťĐµ ŃĐ´Đ°Đ»ĐľŃŃŚ Đ°Đ˛Ń‚ĐľŃ€Đ¸Đ·ĐľĐ˛Đ°Ń‚ŃŚŃŃŹ Đ˛ MAIB." }, { status: 502 });
     }
-    const headers = { Authorization: ${tokenType} ${token} };
+    const headers = { Authorization: `${tokenType} ${token}` };
 
     // Confirm the saved refund belongs to the payment linked to this checkout.
-    const checkoutResponse = await fetch(${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}, {
+    const checkoutResponse = await fetch(`${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}`, {
       method: "GET", headers, cache: "no-store", signal: AbortSignal.timeout(15000),
     });
     const checkoutData = await readJson(checkoutResponse);
@@ -121,10 +121,10 @@ export async function POST(request: NextRequest) {
     const paymentId = payment?.paymentId ?? payment?.PaymentId ?? checkoutResult?.paymentId;
     if (!checkoutResponse.ok || checkoutData?.ok === false || (Array.isArray(checkoutData?.errors) && checkoutData.errors.length > 0) || !validUuid(paymentId)) {
       console.error("Refund status: checkout verification failed.", { httpStatus: checkoutResponse.status });
-      return NextResponse.json({ error: "Не удалось проверить платёж в MAIB." }, { status: 502 });
+      return NextResponse.json({ error: "ĐťĐµ ŃĐ´Đ°Đ»ĐľŃŃŚ ĐżŃ€ĐľĐ˛ĐµŃ€Đ¸Ń‚ŃŚ ĐżĐ»Đ°Ń‚Ń‘Đ¶ Đ˛ MAIB." }, { status: 502 });
     }
 
-    const refundResponse = await fetch(${MAIB_BASE_URL}/v2/payments/refunds/${encodeURIComponent(order.refund_id)}, {
+    const refundResponse = await fetch(`${MAIB_BASE_URL}/v2/payments/refunds/${encodeURIComponent(order.refund_id)}`, {
       method: "GET", headers, cache: "no-store", signal: AbortSignal.timeout(15000),
     });
     const refundData = await readJson(refundResponse);
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
 
     if (!validRefund || typeof refundStatus !== "string") {
       console.error("Refund status: MAIB response could not be validated.", { httpStatus: refundResponse.status });
-      return NextResponse.json({ error: "MAIB не вернул проверяемый статус возврата. Данные в базе не изменены; повторно возврат не отправляй." }, { status: 502 });
+      return NextResponse.json({ error: "MAIB Đ˝Đµ Đ˛ĐµŃ€Đ˝ŃĐ» ĐżŃ€ĐľĐ˛ĐµŃ€ŃŹĐµĐĽŃ‹Đą ŃŃ‚Đ°Ń‚ŃŃ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚Đ°. Đ”Đ°Đ˝Đ˝Ń‹Đµ Đ˛ Đ±Đ°Đ·Đµ Đ˝Đµ Đ¸Đ·ĐĽĐµĐ˝ĐµĐ˝Ń‹; ĐżĐľĐ˛Ń‚ĐľŃ€Đ˝Đľ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚ Đ˝Đµ ĐľŃ‚ĐżŃ€Đ°Đ˛Đ»ŃŹĐą." }, { status: 502 });
     }
 
     const checkedAt = new Date().toISOString();
@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
 
     if (updateError) {
       console.error("Refund status: failed to save status.", updateError.code);
-      return NextResponse.json({ error: "Статус получен, но не удалось сохранить его в базе. Не отправляй повторный возврат.", refundStatus }, { status: 502 });
+      return NextResponse.json({ error: "ĐˇŃ‚Đ°Ń‚ŃŃ ĐżĐľĐ»ŃŃ‡ĐµĐ˝, Đ˝Đľ Đ˝Đµ ŃĐ´Đ°Đ»ĐľŃŃŚ ŃĐľŃ…Ń€Đ°Đ˝Đ¸Ń‚ŃŚ ĐµĐłĐľ Đ˛ Đ±Đ°Đ·Đµ. ĐťĐµ ĐľŃ‚ĐżŃ€Đ°Đ˛Đ»ŃŹĐą ĐżĐľĐ˛Ń‚ĐľŃ€Đ˝Ń‹Đą Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚.", refundStatus }, { status: 502 });
     }
 
     return NextResponse.json({
@@ -175,13 +175,14 @@ export async function POST(request: NextRequest) {
       orderStatus: isRefunded ? "refunded" : order.status,
       checkedAt,
       message: isRefunded
-        ? "MAIB подтвердил завершённый возврат."
-        : "Статус MAIB обновлён. Возврат не отмечен завершённым; повторный запрос не отправлялся.",
+        ? "MAIB ĐżĐľĐ´Ń‚Đ˛ĐµŃ€Đ´Đ¸Đ» Đ·Đ°Đ˛ĐµŃ€ŃŃ‘Đ˝Đ˝Ń‹Đą Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚."
+        : "ĐˇŃ‚Đ°Ń‚ŃŃ MAIB ĐľĐ±Đ˝ĐľĐ˛Đ»Ń‘Đ˝. Đ’ĐľĐ·Đ˛Ń€Đ°Ń‚ Đ˝Đµ ĐľŃ‚ĐĽĐµŃ‡ĐµĐ˝ Đ·Đ°Đ˛ĐµŃ€ŃŃ‘Đ˝Đ˝Ń‹ĐĽ; ĐżĐľĐ˛Ń‚ĐľŃ€Đ˝Ń‹Đą Đ·Đ°ĐżŃ€ĐľŃ Đ˝Đµ ĐľŃ‚ĐżŃ€Đ°Đ˛Đ»ŃŹĐ»ŃŃŹ.",
     }, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Refund status route error.", {
       reason: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "request_error",
     });
-    return NextResponse.json({ error: "Не удалось проверить статус возврата. Повторно возврат не отправляй." }, { status: 502, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ error: "ĐťĐµ ŃĐ´Đ°Đ»ĐľŃŃŚ ĐżŃ€ĐľĐ˛ĐµŃ€Đ¸Ń‚ŃŚ ŃŃ‚Đ°Ń‚ŃŃ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚Đ°. ĐźĐľĐ˛Ń‚ĐľŃ€Đ˝Đľ Đ˛ĐľĐ·Đ˛Ń€Đ°Ń‚ Đ˝Đµ ĐľŃ‚ĐżŃ€Đ°Đ˛Đ»ŃŹĐą." }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }
+

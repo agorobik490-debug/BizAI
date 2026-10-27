@@ -1,4 +1,3 @@
-
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -8,30 +7,49 @@ export const dynamic = "force-dynamic";
 const MAIB_BASE_URL = "https://sandbox.maibmerchants.md";
 const EXPECTED_AMOUNT = 3.99;
 const EXPECTED_CURRENCY = "MDL";
+type JsonObject = Record<string, unknown>;
 
-export async function GET(request: NextRequest) {
+function getObject(value: unknown): JsonObject | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+async function readJson(response: Response): Promise<JsonObject | null> {
   try {
-    const checkoutId = request.nextUrl.searchParams.get("checkoutId");
-    const authorization = request.headers.get("authorization");
-    const accessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    return getObject(await response.json());
+  } catch {
+    return null;
+  }
+}
 
-    if (
-      !checkoutId ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        checkoutId
-      )
-    ) {
-      return NextResponse.json(
-        { error: "Invalid checkoutId." },
-        { status: 400 }
-      );
+function validUuid(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function sameAmount(value: unknown, expected: number): boolean {
+  const amount = Number(value);
+  return Number.isFinite(amount) && Math.round(amount * 100) === Math.round(expected * 100);
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const accessToken = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!accessToken) {
+      return NextResponse.json({ error: "Войди в аккаунт BizAI." }, { status: 401 });
     }
 
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: "Authentication required." },
-        { status: 401 }
-      );
+    let body: JsonObject | null;
+    try {
+      body = getObject(await request.json());
+    } catch {
+      return NextResponse.json({ error: "Некорректный JSON-запрос." }, { status: 400 });
+    }
+
+    const checkoutId = body?.checkoutId;
+    if (!validUuid(checkoutId)) {
+      return NextResponse.json({ error: "Некорректный checkoutId." }, { status: 400 });
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -39,216 +57,131 @@ export async function GET(request: NextRequest) {
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const clientId = process.env.MAIB_CLIENT_ID;
     const clientSecret = process.env.MAIB_CLIENT_SECRET;
-
-    if (
-      !supabaseUrl ||
-      !supabaseKey ||
-      !serviceRoleKey ||
-      !clientId ||
-      !clientSecret
-    ) {
-      console.error(
-        "Payment status environment configuration is incomplete."
-      );
-      return NextResponse.json(
-        { error: "Payment verification is not configured." },
-        { status: 500 }
-      );
+    if (!supabaseUrl || !supabaseKey || !serviceRoleKey || !clientId || !clientSecret) {
+      return NextResponse.json({ error: "Сервер проверки возврата не настроен." }, { status: 500 });
     }
 
-    // Verify the signed-in user.
     const authClient = createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
-
-    const { data: userData, error: userError } =
-      await authClient.auth.getUser(accessToken);
-
+    const { data: userData, error: userError } = await authClient.auth.getUser(accessToken);
     if (userError || !userData.user) {
-      return NextResponse.json(
-        { error: "Please sign in again." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Сессия недействительна. Войди заново." }, { status: 401 });
     }
 
-    // Use the service role only on the server.
     const admin = createClient(supabaseUrl, serviceRoleKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
-
-    // Ensure this checkout belongs to the signed-in user.
     const { data: order, error: orderError } = await admin
       .from("payment_orders")
-      .select("checkout_id, user_id, amount, currency, status")
+      .select("checkout_id, user_id, amount, currency, status, refund_id, refund_status")
       .eq("checkout_id", checkoutId)
       .maybeSingle();
 
     if (orderError) {
-      console.error("Could not load payment order:", orderError.message);
-      return NextResponse.json(
-        { error: "Could not load payment order." },
-        { status: 500 }
-      );
+      console.error("Refund status: order lookup failed.", orderError.code);
+      return NextResponse.json({ error: "Не удалось проверить заказ." }, { status: 500 });
     }
-
     if (!order || order.user_id !== userData.user.id) {
-      return NextResponse.json(
-        { error: "Payment order not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Заказ не найден." }, { status: 404 });
     }
-
-    // A previously activated order must not be applied again.
-    if (order.status === "paid") {
-      return NextResponse.json({
-        status: "Completed",
-        amount: Number(order.amount),
-        currency: order.currency,
-        verified: true,
-        activated: true,
-      });
-    }
-
-    if (order.status !== "pending") {
-      return NextResponse.json({
-        status: order.status,
-        verified: false,
-        activated: false,
-      });
-    }
-
-    // Authenticate with MAIB.
-    const tokenResponse = await fetch(
-      `${MAIB_BASE_URL}/v2/auth/token`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, clientSecret }),
-        cache: "no-store",
-      }
-    );
-
-    const tokenData = await tokenResponse.json();
-    const token = tokenData?.result?.accessToken;
-    const tokenType = tokenData?.result?.tokenType;
-
     if (
-      !tokenResponse.ok ||
-      typeof token !== "string" ||
-      typeof tokenType !== "string" ||
-      tokenData?.errors
+      !["refund_pending", "refunded"].includes(order.status) ||
+      !validUuid(order.refund_id) ||
+      !sameAmount(order.amount, EXPECTED_AMOUNT) ||
+      order.currency !== EXPECTED_CURRENCY
     ) {
-      console.error("MAIB authentication failed:", {
-        httpStatus: tokenResponse.status,
-      });
-      return NextResponse.json(
-        { error: "MAIB authentication failed." },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "У заказа нет сохранённого возврата для проверки." }, { status: 409 });
     }
 
-    // Ask MAIB for the real checkout status.
-    // Do not send Content-Type on this GET request.
-    const statusResponse = await fetch(
-      `${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `${tokenType} ${token}`,
-        },
-        cache: "no-store",
-      }
-    );
+    const tokenResponse = await fetch(`${MAIB_BASE_URL}/v2/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId, clientSecret }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    const tokenData = await readJson(tokenResponse);
+    const tokenResult = getObject(tokenData?.result);
+    const token = tokenResult?.accessToken;
+    const tokenType = tokenResult?.tokenType ?? "Bearer";
+    if (!tokenResponse.ok || tokenData?.ok === false || (Array.isArray(tokenData?.errors) && tokenData.errors.length > 0) || typeof token !== "string" || !token || typeof tokenType !== "string") {
+      console.error("Refund status: MAIB authentication failed.", { httpStatus: tokenResponse.status });
+      return NextResponse.json({ error: "Не удалось авторизоваться в MAIB." }, { status: 502 });
+    }
+    const headers = { Authorization: `${tokenType} ${token}` };
 
-    const data = await statusResponse.json();
-
-    if (
-      !statusResponse.ok ||
-      !data?.result ||
-      data?.ok === false ||
-      data?.errors
-    ) {
-      console.error("MAIB checkout status request failed:", {
-        httpStatus: statusResponse.status,
-        responseBody: JSON.stringify(data ?? null).slice(0, 2000),
-      });
-
-      return NextResponse.json(
-        { error: "MAIB could not verify this checkout." },
-        { status: 502 }
-      );
+    // Confirm the saved refund belongs to the payment linked to this checkout.
+    const checkoutResponse = await fetch(`${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}`, {
+      method: "GET", headers, cache: "no-store", signal: AbortSignal.timeout(15000),
+    });
+    const checkoutData = await readJson(checkoutResponse);
+    const checkoutResult = getObject(checkoutData?.result);
+    const payment = getObject(checkoutResult?.payment);
+    const paymentId = payment?.paymentId ?? payment?.PaymentId ?? checkoutResult?.paymentId;
+    if (!checkoutResponse.ok || checkoutData?.ok === false || (Array.isArray(checkoutData?.errors) && checkoutData.errors.length > 0) || !validUuid(paymentId)) {
+      console.error("Refund status: checkout verification failed.", { httpStatus: checkoutResponse.status });
+      return NextResponse.json({ error: "Не удалось проверить платёж в MAIB." }, { status: 502 });
     }
 
-    const checkout = data.result;
-    const status =
-      typeof checkout.status === "string"
-        ? checkout.status
-        : "Unknown";
+    const refundResponse = await fetch(`${MAIB_BASE_URL}/v2/payments/refunds/${encodeURIComponent(order.refund_id)}`, {
+      method: "GET", headers, cache: "no-store", signal: AbortSignal.timeout(15000),
+    });
+    const refundData = await readJson(refundResponse);
+    const refund = getObject(refundData?.result);
+    const refundStatus = refund?.status;
+    const refundPaymentId = refund?.paymentId;
+    const refundRecordId = refund?.id ?? refund?.refundId;
+    const validRefund = refundResponse.ok &&
+      refundData?.ok === true &&
+      !(Array.isArray(refundData?.errors) && refundData.errors.length > 0) &&
+      refundRecordId === order.refund_id &&
+      refundPaymentId === paymentId &&
+      sameAmount(refund?.amount, EXPECTED_AMOUNT) &&
+      refund?.currency === EXPECTED_CURRENCY &&
+      typeof refundStatus === "string";
 
-    const amount = Number(checkout.amount);
-    const currency = checkout.currency;
-
-    const verified =
-      status === "Completed" &&
-      Number.isFinite(amount) &&
-      Math.round(amount * 100) ===
-        Math.round(EXPECTED_AMOUNT * 100) &&
-      Math.round(Number(order.amount) * 100) ===
-        Math.round(EXPECTED_AMOUNT * 100) &&
-      currency === EXPECTED_CURRENCY &&
-      order.currency === EXPECTED_CURRENCY;
-
-    if (!verified) {
-      return NextResponse.json({
-        status,
-        amount: Number.isFinite(amount) ? amount : null,
-        currency: typeof currency === "string" ? currency : null,
-        verified: false,
-        activated: false,
-      });
+    if (!validRefund || typeof refundStatus !== "string") {
+      console.error("Refund status: MAIB response could not be validated.", { httpStatus: refundResponse.status });
+      return NextResponse.json({ error: "MAIB не вернул проверяемый статус возврата. Данные в базе не изменены; повторно возврат не отправляй." }, { status: 502 });
     }
 
-    // Activate only after MAIB and the saved order both match.
-    const { data: activation, error: activationError } =
-      await admin.rpc("activate_bizai_pro", {
-        p_checkout_id: checkoutId,
-      });
+    const checkedAt = new Date().toISOString();
+    // Only the explicit terminal status `Refunded` marks the order as refunded.
+    // Other statuses are recorded verbatim without guessing their meaning.
+    const isRefunded = refundStatus === "Refunded";
+    const { error: updateError } = await admin
+      .from("payment_orders")
+      .update({
+        refund_status: refundStatus,
+        refund_last_checked_at: checkedAt,
+        ...(isRefunded ? { status: "refunded", refunded_at: checkedAt } : {}),
+      })
+      .eq("checkout_id", checkoutId)
+      .eq("user_id", userData.user.id)
+      .in("status", ["refund_pending", "refunded"]);
 
-    if (activationError || activation?.ok !== true) {
-      console.error("Pro activation failed:", {
-        message: activationError?.message,
-        activationError: activation?.error,
-      });
-
-      return NextResponse.json(
-        { error: "Payment verified, but Pro activation failed." },
-        { status: 500 }
-      );
+    if (updateError) {
+      console.error("Refund status: failed to save status.", updateError.code);
+      return NextResponse.json({ error: "Статус получен, но не удалось сохранить его в базе. Не отправляй повторный возврат.", refundStatus }, { status: 502 });
     }
 
     return NextResponse.json({
-      status,
-      amount,
-      currency,
-      verified: true,
-      activated: true,
-      alreadyActivated: activation.already_activated === true,
-    });
+      success: true,
+      checkoutId,
+      refundId: order.refund_id,
+      paymentId,
+      refundStatus,
+      orderStatus: isRefunded ? "refunded" : order.status,
+      checkedAt,
+      message: isRefunded
+        ? "MAIB подтвердил завершённый возврат."
+        : "Статус MAIB обновлён. Возврат не отмечен завершённым; повторный запрос не отправлялся.",
+    }, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error(
-      "Checkout status route error:",
-      error instanceof Error ? error.message : "Unknown error"
-    );
-
-    return NextResponse.json(
-      { error: "Unexpected payment verification error." },
-      { status: 500 }
-    );
+    console.error("Refund status route error.", {
+      reason: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "request_error",
+    });
+    return NextResponse.json({ error: "Не удалось проверить статус возврата. Повторно возврат не отправляй." }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 }
