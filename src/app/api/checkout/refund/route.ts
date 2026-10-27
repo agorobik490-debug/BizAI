@@ -316,6 +316,30 @@ export async function POST(request: NextRequest) {
                 { headers: { "Cache-Control": "no-store" } }
             );
         }
+
+
+        // Атомарно резервируем заказ для возврата.
+        // Только один запрос сможет изменить paid на refund_pending.
+        const { data: claimedOrder, error: claimError } = await admin
+            .from("payment_orders")
+            .update({ status: "refund_pending" })
+            .eq("checkout_id", checkoutId)
+            .eq("user_id", userData.user.id)
+            .eq("status", "paid")
+            .select("checkout_id")
+            .maybeSingle();
+
+        if (claimError || !claimedOrder) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Заказ уже обрабатывается или не готов к возврату. Проверь статус перед повторной попыткой.",
+                },
+                { status: 409 }
+            );
+        }
+
+
         // Запускаем полный возврат только после проверок выше.
         const refundResponse = await fetch(
             `${MAIB_BASE_URL}/v2/payments/${encodeURIComponent(paymentId)}/refund`,
@@ -337,21 +361,87 @@ export async function POST(request: NextRequest) {
         const refundData = await readJson(refundResponse);
         const refundResult = getObject(refundData?.result);
 
+        const maibRejected =
+            refundResponse.status >= 400 ||
+            refundData?.ok === false ||
+            (Array.isArray(refundData?.errors) &&
+                refundData.errors.length > 0);
+
         if (
             !refundResponse.ok ||
             refundData?.ok !== true ||
             (Array.isArray(refundData?.errors) &&
                 refundData.errors.length > 0)
         ) {
-            console.error("Refund: MAIB rejected the request.", {
+            console.error("Refund: MAIB did not confirm the request.", {
                 httpStatus: refundResponse.status,
             });
 
+            // Не считаем возврат отклонённым только по ошибке ответа.
+            // Сначала повторно проверяем фактическое состояние платежа.
+            if (maibRejected) {
+                try {
+                    const verifyResponse = await fetch(
+                        `${MAIB_BASE_URL}/v2/payments/${encodeURIComponent(paymentId)}`,
+                        {
+                            method: "GET",
+                            headers,
+                            cache: "no-store",
+                            signal: AbortSignal.timeout(15000),
+                        }
+                    );
+
+                    const verifyData = await readJson(verifyResponse);
+                    const verifiedPayment = getObject(verifyData?.result);
+
+                    const refundDefinitelyNotCreated =
+                        verifyResponse.ok &&
+                        verifyData?.ok !== false &&
+                        verifiedPayment?.status === "Executed" &&
+                        verifiedPayment?.isRefundable === true &&
+                        sameAmount(
+                            verifiedPayment?.refundableAmount,
+                            EXPECTED_AMOUNT
+                        ) &&
+                        Number(verifiedPayment?.refundedAmount ?? 0) === 0 &&
+                        Number(
+                            verifiedPayment?.requestedRefundAmount ?? 0
+                        ) === 0;
+
+                    if (refundDefinitelyNotCreated) {
+                        const { error: restoreError } = await admin
+                            .from("payment_orders")
+                            .update({ status: "paid" })
+                            .eq("checkout_id", checkoutId)
+                            .eq("user_id", userData.user.id)
+                            .eq("status", "refund_pending");
+
+                        if (restoreError) {
+                            console.error(
+                                "Refund: could not restore order status.",
+                                restoreError.code
+                            );
+                        }
+                    }
+                } catch {
+                    // При ошибке проверки сохраняем refund_pending.
+                    // Перед повторным запросом нужно проверить MAIB вручную.
+                }
+            }
+
             return NextResponse.json(
-                { error: "MAIB не подтвердил создание возврата. Проверь статус платежа." },
+                {
+                    error:
+                        "MAIB не подтвердил создание возврата. Проверь фактический статус платежа перед повторной попыткой.",
+                    refundStatus:
+                        typeof refundResult?.status === "string"
+                            ? refundResult.status
+                            : "Unknown",
+                },
                 { status: 502 }
             );
         }
+
 
         const refundId = refundResult?.refundId;
         const refundStatus = refundResult?.status;
