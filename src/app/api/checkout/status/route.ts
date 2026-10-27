@@ -17,7 +17,9 @@ export async function GET(request: NextRequest) {
 
     if (
       !checkoutId ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkoutId)
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        checkoutId
+      )
     ) {
       return NextResponse.json(
         { error: "Invalid checkoutId." },
@@ -45,7 +47,9 @@ export async function GET(request: NextRequest) {
       !clientId ||
       !clientSecret
     ) {
-      console.error("Payment status environment configuration is incomplete.");
+      console.error(
+        "Payment status environment configuration is incomplete."
+      );
       return NextResponse.json(
         { error: "Payment verification is not configured." },
         { status: 500 }
@@ -150,20 +154,19 @@ export async function GET(request: NextRequest) {
     }
 
     // Ask MAIB for the real checkout status.
+    // Do not send Content-Type on this GET request.
     const statusResponse = await fetch(
       `${MAIB_BASE_URL}/v2/checkouts/${encodeURIComponent(checkoutId)}`,
       {
         method: "GET",
         headers: {
           Authorization: `${tokenType} ${token}`,
-          "Content-Type": "application/json",
         },
         cache: "no-store",
       }
     );
 
     const data = await statusResponse.json();
-
 
     if (
       !statusResponse.ok ||
@@ -182,7 +185,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-
     const checkout = data.result;
     const status =
       typeof checkout.status === "string"
@@ -195,9 +197,10 @@ export async function GET(request: NextRequest) {
     const verified =
       status === "Completed" &&
       Number.isFinite(amount) &&
-      Math.round(amount * 100) === Math.round(EXPECTED_AMOUNT * 100) &&
+      Math.round(amount * 100) ===
+        Math.round(EXPECTED_AMOUNT * 100) &&
       Math.round(Number(order.amount) * 100) ===
-      Math.round(EXPECTED_AMOUNT * 100) &&
+        Math.round(EXPECTED_AMOUNT * 100) &&
       currency === EXPECTED_CURRENCY &&
       order.currency === EXPECTED_CURRENCY;
 
@@ -222,6 +225,7 @@ export async function GET(request: NextRequest) {
         message: activationError?.message,
         activationError: activation?.error,
       });
+
       return NextResponse.json(
         { error: "Payment verified, but Pro activation failed." },
         { status: 500 }
