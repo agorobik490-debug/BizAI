@@ -54,6 +54,7 @@ export default function PricingPage() {
   const [noticeError, setNoticeError] = useState(false);
   const [loadingAccount, setLoadingAccount] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const selectedPeriod = periods.find((item) => item.months === selectedMonths) ?? periods[0];
 
   const proTotal = useMemo(() => totalPrice(PRO_MONTHLY, selectedPeriod), [selectedPeriod]);
@@ -139,6 +140,11 @@ export default function PricingPage() {
       return;
     }
 
+    if (!termsAccepted) {
+      showNotice("Для продолжения необходимо принять Правила и условия BizAI.", true);
+      return;
+    }
+
     // На сервере сейчас настроен тестовый платёж
     // только на 3.99 MDL за один месяц.
     if (selectedMonths !== 1) {
@@ -172,6 +178,7 @@ export default function PricingPage() {
         body: JSON.stringify({
           plan: "pro",
           months: 1,
+          acceptedTerms: termsAccepted,
         }),
       });
 
@@ -326,7 +333,33 @@ export default function PricingPage() {
             <div className="absolute right-5 top-5 rounded-full bg-purple-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">Популярный</div>
             <div className="flex items-start justify-between gap-3 pr-24"><div><p className="text-sm font-semibold text-purple-600 dark:text-purple-300">Для активной работы</p><h2 className="mt-1 text-2xl font-bold">Pro</h2></div><span className="grid h-11 w-11 place-items-center rounded-2xl bg-purple-600/10 text-xl">♛</span></div>
             <div className="mt-5"><p className="text-4xl font-black">{formatUSD(proTotal)}</p><p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">за {selectedPeriod.label.toLowerCase()}</p>{selectedPeriod.discount > 0 && <p className="mt-2 text-xs text-zinc-400"><span className="line-through">{formatUSD(proRegularTotal)}</span><span className="ml-2 font-semibold text-emerald-600 dark:text-emerald-400">Экономия {formatUSD(proRegularTotal - proTotal)} ({selectedPeriod.discount}%)</span></p>}<p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{formatUSD(proTotal / selectedMonths)} в месяц</p></div>
-            <button type="button" onClick={startProCheckout} disabled={checkoutLoading || (currentPlan === "pro" && currentPlanStatus === "active")} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-sm font-bold text-white shadow-[0_8px_22px_rgba(124,58,237,.18)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">{currentPlan === "pro" && currentPlanStatus === "active" ? "Текущий тариф" : checkoutLoading ? "Создаём платёж..." : "Выбрать Pro"}</button>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 text-left text-xs leading-5 text-zinc-600 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={termsAccepted}
+                onChange={(event) => setTermsAccepted(event.target.checked)}
+                className="mt-1 h-4 w-4 shrink-0 accent-purple-600"
+              />
+              <span>
+                Я принимаю{" "}
+                <Link
+                  href="/terms"
+                  target="_blank"
+                  className="font-semibold text-purple-600 underline underline-offset-2"
+                >
+                  Правила и условия BizAI
+                </Link>
+                {" "}и подтверждаю согласие с условиями предоставления цифровых услуг.
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={startProCheckout}
+              disabled={checkoutLoading || !termsAccepted || (currentPlan === "pro" && currentPlanStatus === "active")}
+              className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 px-4 py-3 text-sm font-bold text-white shadow-[0_8px_22px_rgba(124,58,237,.18)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {currentPlan === "pro" && currentPlanStatus === "active" ? "Текущий тариф" : checkoutLoading ? "Создаём платёж..." : "Выбрать Pro"}
+            </button>
             <ul className="mt-6 space-y-3 text-sm text-zinc-700 dark:text-zinc-200"><Feature>Текстовые генерации без списания бесплатного лимита</Feature><Feature>Генерация рекламных изображений</Feature><Feature>Контент-пакеты, соцсети и контент-планы</Feature><Feature>Рекламные кампании и Brand Kit</Feature><Feature>История текстов и медиа</Feature></ul>
             <p className="mt-auto pt-6 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">Оплата Pro подключена только для тестирования MAIB: сейчас создаётся тестовый платёж 3.99 MDL за 1 месяц. Автоматическая активация после оплаты ещё не подключена.</p>
           </article>

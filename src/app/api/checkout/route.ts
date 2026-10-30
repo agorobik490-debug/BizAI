@@ -1,4 +1,3 @@
-
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -32,6 +31,24 @@ async function readJson(response: Response): Promise<JsonObject | null> {
 
 export async function POST(request: NextRequest) {
   try {
+    // Проверяем согласие на сервере: одной проверки в браузере недостаточно.
+    let requestBody: JsonObject | null = null;
+    try {
+      requestBody = getObject(await request.json());
+    } catch {
+      return NextResponse.json(
+        { error: "Некорректный запрос на создание платежа." },
+        { status: 400 }
+      );
+    }
+
+    if (requestBody?.acceptedTerms !== true) {
+      return NextResponse.json(
+        { error: "Перед оплатой необходимо принять Правила и условия BizAI." },
+        { status: 400 }
+      );
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -109,17 +126,14 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Сумма задаётся только сервером, не браузером.
-    const tokenResponse = await fetch(
-      `${MAIB_BASE_URL}/v2/auth/token`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, clientSecret }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(15000),
-      }
-    );
+    // Сумма и валюта задаются только сервером, не браузером.
+    const tokenResponse = await fetch(`${MAIB_BASE_URL}/v2/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId, clientSecret }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
 
     const tokenData = await readJson(tokenResponse);
     const tokenResult = getObject(tokenData?.result);
@@ -142,28 +156,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const checkoutResponse = await fetch(
-      `${MAIB_BASE_URL}/v2/checkouts`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `${tokenType} ${maibToken}`,
-          "Content-Type": "application/json",
+    const checkoutResponse = await fetch(`${MAIB_BASE_URL}/v2/checkouts`, {
+      method: "POST",
+      headers: {
+        Authorization: `${tokenType} ${maibToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        amount: AMOUNT,
+        currency: CURRENCY,
+        language: "ru",
+        orderInfo: {
+          description: "BizAI Pro - 1 month",
         },
-        body: JSON.stringify({
-          amount: AMOUNT,
-          currency: CURRENCY,
-          language: "ru",
-          orderInfo: {
-            description: "BizAI Pro - 1 month",
-          },
-          successUrl: `${siteUrl}/payment/success`,
-          failUrl: `${siteUrl}/payment/fail`,
-        }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(15000),
-      }
-    );
+        successUrl: `${siteUrl}/payment/success`,
+        failUrl: `${siteUrl}/payment/fail`,
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
 
     const checkoutData = await readJson(checkoutResponse);
     const checkoutResult = getObject(checkoutData?.result);
@@ -207,7 +218,10 @@ export async function POST(request: NextRequest) {
         code: insertError.code,
       });
       return NextResponse.json(
-        { error: "Платёж создан, но не удалось сохранить заказ. Обратись в поддержку." },
+        {
+          error:
+            "Платёж создан, но не удалось сохранить заказ. Обратись в поддержку.",
+        },
         { status: 500 }
       );
     }
